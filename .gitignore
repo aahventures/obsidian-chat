@@ -4,3 +4,6 @@ dist/
 *.js.map
 data.json
 debug.log
+
+# Clawpatch local review state
+.clawpatch/
