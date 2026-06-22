@@ -1,6 +1,6 @@
 // ─── Settings ───────────────────────────────────────────────────────────────
 
-export type Provider = "anthropic" | "openai";
+export type Provider = "anthropic" | "openai" | "custom";
 
 export interface ChatSettings {
   provider: Provider;
@@ -8,6 +8,7 @@ export interface ChatSettings {
   model: string;
   maxIterations: number;
   enableWebSearch: boolean;
+  baseUrl: string;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   model: "claude-sonnet-4-6",
   maxIterations: 20,
   enableWebSearch: true,
+  baseUrl: "",
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────

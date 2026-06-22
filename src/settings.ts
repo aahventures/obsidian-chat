@@ -18,6 +18,10 @@ const FALLBACK_MODELS: Record<string, ModelOption[]> = {
     { value: "gpt-5.4", label: "GPT-5.4" },
     { value: "gpt-4o", label: "GPT-4o" },
   ],
+  custom: [
+    { value: "deepseek-chat", label: "DeepSeek V3" },
+    { value: "deepseek-reasoner", label: "DeepSeek R1" },
+  ],
 };
 
 // Cache fetched models per provider so they survive tab re-opens
@@ -51,22 +55,47 @@ export class ChatSettingTab extends PluginSettingTab {
     // ─── Provider ─────────────────────────────────────────────────────
     new Setting(containerEl)
       .setName("Provider")
-      .setDesc("Which AI provider to use")
+      .setDesc("Which AI provider to use. Select Custom for DeepSeek, Ollama, OpenRouter, etc.")
       .addDropdown((dropdown) =>
         dropdown
           .addOption("anthropic", "Anthropic")
           .addOption("openai", "OpenAI")
+          .addOption("custom", "Custom (OpenAI-compatible)")
           .setValue(s.provider)
           .onChange(async (value) => {
             // Load the new provider's key BEFORE saving,
             // otherwise the old provider's key gets saved under the new provider name
             s.provider = value as Provider;
             s.model = "";
+            // Custom providers don't support built-in web search; keep the
+            // stored flag in sync with the disabled toggle shown below.
+            if (s.provider === "custom") {
+              s.enableWebSearch = false;
+            }
             this.plugin.reloadApiKeyForProvider();
             await this.plugin.saveSettings();
             setTimeout(() => this.display(), 10);
           })
       );
+
+    // ─── Base URL (only shown for custom provider) ───────────────────
+    if (s.provider === "custom") {
+      new Setting(containerEl)
+        .setName("Base URL")
+        .setDesc("API endpoint base URL. E.g. https://api.deepseek.com for DeepSeek, or http://localhost:11434 for Ollama")
+        .addText((text) =>
+          text
+            .setPlaceholder("https://api.deepseek.com")
+            .setValue(s.baseUrl)
+            .onChange(async (value) => {
+              s.baseUrl = value.trim().replace(/\/+$/, "");
+              // Model availability depends on the endpoint; drop the cached
+              // list so a stale set from the previous Base URL isn't shown.
+              modelCache.delete(s.provider);
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     // ─── API Key + Test ─────────────────────────────────────────────
     const apiKeySetting = new Setting(containerEl)
@@ -124,32 +153,26 @@ export class ChatSettingTab extends PluginSettingTab {
 
     const modelSetting = new Setting(containerEl)
       .setName("Model")
-      .setDesc(cached ? `${cached.length} models from API` : "Using defaults. Click refresh to load from API.")
+      .setDesc(cached ? `${cached.length} models loaded from API` : "Select a model or type a custom model ID")
       .addDropdown((dropdown) => {
         for (const m of models) {
           dropdown.addOption(m.value, m.label);
         }
         dropdown.addOption("__custom__", "Custom...");
-
-        // If current model isn't in the list, add it
-        if (s.model && !models.some((m) => m.value === s.model)) {
-          dropdown.addOption(s.model, `${s.model} (current)`);
-        }
-
-        dropdown.setValue(s.model || models[0]?.value || "");
+        const current = models.some((m) => m.value === s.model) ? s.model : "__custom__";
+        dropdown.setValue(current);
         dropdown.onChange(async (value) => {
           if (value === "__custom__") {
             s.model = "";
-            await this.plugin.saveSettings();
-            setTimeout(() => this.display(), 10);
           } else {
             s.model = value;
-            await this.plugin.saveSettings();
           }
+          await this.plugin.saveSettings();
+          setTimeout(() => this.display(), 10);
         });
       });
 
-    // Refresh button
+    // Refresh button to fetch models from API
     if (s.apiKey) {
       modelSetting.addButton((btn) =>
         btn
@@ -158,7 +181,7 @@ export class ChatSettingTab extends PluginSettingTab {
           .onClick(async () => {
             btn.setDisabled(true);
             try {
-              const fetched = await fetchModelsFromAPI(s.provider, s.apiKey);
+              const fetched = await fetchModelsFromAPI(s);
               modelCache.set(s.provider, fetched);
               new Notice(`Loaded ${fetched.length} models`);
               if (!s.model && fetched.length > 0) {
@@ -174,14 +197,28 @@ export class ChatSettingTab extends PluginSettingTab {
       );
     }
 
-    // Custom model text field (shown when Custom... selected or model is empty)
-    if (!s.model) {
+    // Custom model text field (shown when Custom... is selected, i.e. the
+    // saved model isn't one of the listed options — covers empty model and
+    // saved-but-unlisted custom IDs so they remain visible and editable)
+    if (!models.some((m) => m.value === s.model)) {
       new Setting(containerEl)
         .setName("Custom model ID")
-        .setDesc("Enter the full model identifier")
+        .setDesc(
+          s.provider === "custom"
+            ? "Enter the full model identifier (e.g. deepseek-chat, deepseek-reasoner)"
+            : s.provider === "anthropic"
+            ? "Enter the full model identifier (e.g. claude-sonnet-4-20250514)"
+            : "Enter the full model identifier (e.g. gpt-4o)"
+        )
         .addText((text) =>
           text
-            .setPlaceholder(s.provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o")
+            .setPlaceholder(
+              s.provider === "custom"
+                ? "deepseek-chat"
+                : s.provider === "anthropic"
+                ? "claude-sonnet-4-20250514"
+                : "gpt-4o"
+            )
             .setValue(s.model)
             .onChange(async (value) => {
               s.model = value.trim();
@@ -191,17 +228,28 @@ export class ChatSettingTab extends PluginSettingTab {
     }
 
     // ─── Web search ───────────────────────────────────────────────────
-    new Setting(containerEl)
-      .setName("Web search")
-      .setDesc("Allow the model to search the web when it needs current information")
-      .addToggle((toggle) =>
-        toggle
-          .setValue(s.enableWebSearch)
-          .onChange(async (value) => {
-            s.enableWebSearch = value;
-            await this.plugin.saveSettings();
-          })
-      );
+    if (s.provider === "custom") {
+      new Setting(containerEl)
+        .setName("Web search")
+        .setDesc("Not supported for custom providers. Most third-party APIs do not offer built-in web search.")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(false)
+            .setDisabled(true)
+        );
+    } else {
+      new Setting(containerEl)
+        .setName("Web search")
+        .setDesc("Allow the model to search the web when it needs current information")
+        .addToggle((toggle) =>
+          toggle
+            .setValue(s.enableWebSearch)
+            .onChange(async (value) => {
+              s.enableWebSearch = value;
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
@@ -219,21 +267,49 @@ export class ChatSettingTab extends PluginSettingTab {
             }
           })
       );
-
-    // System prompt override removed for simplicity
   }
 }
 
 // ─── Model Fetching (only triggered by explicit refresh button click) ───────
 
 async function fetchModelsFromAPI(
-  provider: Provider,
-  apiKey: string
+  settings: ChatPlugin["settings"]
 ): Promise<ModelOption[]> {
-  if (provider === "anthropic") {
-    return fetchAnthropicModels(apiKey);
+  if (settings.provider === "anthropic") {
+    return fetchAnthropicModels(settings.apiKey);
   }
-  return fetchOpenAIModels(apiKey);
+  if (settings.provider === "custom") {
+    return fetchCustomModels(settings);
+  }
+  return fetchOpenAIModels(settings.apiKey);
+}
+
+async function fetchCustomModels(settings: ChatPlugin["settings"]): Promise<ModelOption[]> {
+  const baseUrl = (settings.baseUrl || "https://api.deepseek.com").replace(/\/+$/, "");
+  let response;
+  try {
+    response = await requestUrl({
+      url: `${baseUrl}/v1/models`,
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${settings.apiKey}`,
+      },
+      throw: false,
+    });
+  } catch {
+    // Fall back to default list if model endpoint fails
+    return FALLBACK_MODELS.custom;
+  }
+
+  if (response.status !== 200) {
+    return FALLBACK_MODELS.custom;
+  }
+
+  const models = (response.json?.data || [])
+    .filter((m: { id: string }) => m.id && !m.id.startsWith("ft:"))
+    .map((m: { id: string }) => ({ value: m.id, label: m.id }));
+
+  return models.length > 0 ? models : FALLBACK_MODELS.custom;
 }
 
 async function fetchAnthropicModels(apiKey: string): Promise<ModelOption[]> {

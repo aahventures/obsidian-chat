@@ -1,6 +1,7 @@
 import type { ChatSettings, UnifiedMessage, UnifiedToolDef, UnifiedResponse } from "../types";
 import { sendAnthropicMessage } from "./anthropic";
 import { sendOpenAIMessage } from "./openai";
+import { sendCustomMessage } from "./custom";
 
 /**
  * Dispatches a message to the appropriate provider adapter.
@@ -15,6 +16,9 @@ export async function sendMessage(
   const doSend = () => {
     if (settings.provider === "anthropic") {
       return sendAnthropicMessage(settings, messages, tools, systemPrompt);
+    }
+    if (settings.provider === "custom") {
+      return sendCustomMessage(settings, messages, tools, systemPrompt);
     }
     return sendOpenAIMessage(settings, messages, tools, systemPrompt);
   };
