@@ -119,6 +119,17 @@
     hideThinking();
   }
 
+  /**
+   * Drop whatever is half-typed in the input.
+   *
+   * Drafts are not part of a conversation, so a pane switching sessions must
+   * not carry one across — otherwise the next send lands in the wrong chat.
+   */
+  export function clearInput(): void {
+    inputText = "";
+    resetHeight();
+  }
+
   export function focus(): void {
     textareaEl?.focus();
   }

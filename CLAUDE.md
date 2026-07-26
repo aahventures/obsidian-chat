@@ -34,6 +34,7 @@ src/
     executor.ts          # Runs tools against Obsidian Vault APIs
   agent/
     loop.ts              # Core agentic loop with selection scope
+    sessions.ts          # SessionStore: owns conversations, runs their turns
     context.ts           # Builds vault context (active file, selection)
     system-prompt.ts     # Static system prompt (KV cache optimized)
   ui/
@@ -45,8 +46,11 @@ src/
 
 - **KV cache optimization**: System prompt is static (never includes dynamic context). Dynamic context (active file, selection) goes in the user message after the cached prefix.
 - **Anthropic `cache_control`**: Breakpoints on system prompt and last tool definition.
-- **Per-provider API keys**: Stored as `ochat-api-key-anthropic` / `ochat-api-key-openai` in `SecretStorage`.
-- **In-memory chat persistence**: `AgentLoop` and `chatHistory` live on the plugin instance, surviving view open/close cycles.
+- **Per-provider API keys**: Stored as `obsidian-chat-api-key-{provider}` in `SecretStorage`.
+- **Multiple sessions**: `SessionStore` (on the plugin instance) owns every conversation and runs their turns. Each session has its own `AgentLoop` and its own `ProviderState`, so concurrent conversations cannot cross-contaminate — this matters most for OpenAI, whose `previous_response_id` chain is server-side state.
+- **One leaf per session**: `ObsidianChatView` is a window onto a session, holding no conversation state. It persists `{ sessionId }` via `getState()`/`setState()`, so tabs, split panes, and pop-out windows all survive a restart. Obsidian's tab bar is the session switcher.
+- **Runs outlive views**: Callbacks write into the session record unconditionally, then notify subscribed views. `onClose()` deliberately does not abort — only plugin unload does. Closing a pane mid-turn lets it finish; reopening replays what happened.
+- **Chat persistence**: `chat-sessions.json` in the plugin folder. Because that folder syncs between devices, `save()` re-reads and merges unknown sessions rather than blindly overwriting.
 - **Selection scope**: Injected into user message with scoping instructions. Model uses `find_replace` within selection text.
 
 ## Build

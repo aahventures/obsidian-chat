@@ -1,4 +1,4 @@
-import { ItemView, Notice, WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, WorkspaceLeaf, type ViewStateResult } from "obsidian";
 import { mount, unmount } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
@@ -40,11 +40,53 @@ export class ObsidianChatView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Chat";
+    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : null;
+    return session?.title || "Chat";
   }
 
   getIcon(): string {
     return "message-circle";
+  }
+
+  /** Which session this pane is showing. */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  /**
+   * Make the tab header re-read `getDisplayText()`.
+   *
+   * `updateHeader()` exists at runtime but is not in Obsidian's public
+   * typings, so it is called optionally — a stale tab title is a cosmetic
+   * problem, and not worth risking a crash over if it ever goes away.
+   */
+  private refreshHeader(): void {
+    (this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
+  }
+
+  /**
+   * Persisted into the workspace layout, so a pane comes back to the same
+   * conversation after a restart or when dragged into a pop-out window.
+   */
+  getState(): Record<string, unknown> {
+    return { sessionId: this.sessionId };
+  }
+
+  async setState(state: unknown, result: ViewStateResult): Promise<void> {
+    const requested = (state as { sessionId?: unknown } | null)?.sessionId;
+
+    if (typeof requested === "string" && requested !== this.sessionId) {
+      if (this.chatContainer) {
+        // Already mounted — rebind live.
+        this.bindTo(requested);
+      } else {
+        // Not mounted yet; onOpen will resolve this id (and fall back if the
+        // session no longer exists, e.g. it was deleted before a restart).
+        this.sessionId = requested;
+      }
+    }
+
+    await super.setState(state, result);
   }
 
   async onOpen(): Promise<void> {
@@ -73,6 +115,7 @@ export class ObsidianChatView extends ItemView {
     this.unsubscribe = this.plugin.sessions.subscribe(session.id, (event) =>
       this.applyEvent(event)
     );
+    this.refreshHeader();
 
     this.chatContainer.focus();
     this.readyResolve?.();
@@ -129,7 +172,26 @@ export class ObsidianChatView extends ItemView {
       const existing = this.plugin.sessions.get(this.sessionId);
       if (existing) return existing;
     }
-    return this.plugin.sessions.list()[0] ?? this.plugin.sessions.create();
+
+    // No session, or the requested one is gone. Prefer a session no other pane
+    // is already showing, so two panes don't end up mirroring one conversation.
+    const taken = this.plugin.openSessionIds(this);
+    const free = this.plugin.sessions.list().find((s) => !taken.has(s.id));
+    return free ?? this.plugin.sessions.create();
+  }
+
+  /** Point this pane at a different session. */
+  bindTo(sessionId: string): void {
+    const session = this.plugin.sessions.get(sessionId);
+    if (!session) return;
+
+    this.unsubscribe?.();
+    this.sessionId = sessionId;
+    this.replay(session);
+    this.unsubscribe = this.plugin.sessions.subscribe(sessionId, (event) =>
+      this.applyEvent(event)
+    );
+    this.refreshHeader();
   }
 
   /** Rebuild the rendered conversation from the session's stored messages. */
@@ -138,6 +200,7 @@ export class ObsidianChatView extends ItemView {
     if (!chat) return;
 
     chat.clearMessages();
+    chat.clearInput();
     this.toolRows.clear();
 
     for (const msg of session.uiMessages) {
@@ -228,6 +291,8 @@ export class ObsidianChatView extends ItemView {
         break;
 
       case "title":
+        // Retitle the tab header now the session has a real name.
+        this.refreshHeader();
         break;
     }
   }

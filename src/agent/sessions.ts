@@ -59,6 +59,11 @@ export class SessionStore {
   private settings: ChatSettings;
   private sessions = new Map<string, LiveSession>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Sessions deleted in this run. Tracked so the merge in `save()` cannot
+   * resurrect them from a copy of the file written before the delete.
+   */
+  private deletedIds = new Set<string>();
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -119,6 +124,7 @@ export class SessionStore {
     session.loop.abort();
     session.listeners.clear();
     this.sessions.delete(id);
+    this.deletedIds.add(id);
     this.scheduleSave();
   }
 
@@ -380,18 +386,44 @@ export class SessionStore {
       this.saveTimer = null;
     }
     try {
-      const payload = {
-        version: 2,
-        sessions: [...this.sessions.values()].map((session) => {
-          this.syncFromLoop(session);
-          return {
-            ...session.record,
-            uiMessages: session.record.uiMessages.slice(-MAX_UI_MESSAGES),
-            agentMessages: session.record.agentMessages.slice(-MAX_AGENT_MESSAGES),
-          };
-        }),
-      };
-      await this.app.vault.adapter.write(STATE_PATH, JSON.stringify(payload));
+      const ours: ChatSession[] = [...this.sessions.values()].map((session) => {
+        this.syncFromLoop(session);
+        return {
+          ...session.record,
+          uiMessages: session.record.uiMessages.slice(-MAX_UI_MESSAGES),
+          agentMessages: session.record.agentMessages.slice(-MAX_AGENT_MESSAGES),
+        };
+      });
+
+      // This file lives next to data.json in the plugin folder, so it syncs
+      // between devices. Re-read before writing and keep any session we do not
+      // know about, otherwise this device's view of the world would silently
+      // delete conversations another device created since we last loaded.
+      // Sessions we do hold are ours to overwrite; a genuine concurrent edit to
+      // the SAME conversation on two devices still resolves last-write-wins.
+      const onDisk = await this.readState();
+
+      // Deletions travel as tombstones. Without them a delete never propagates:
+      // the other device still holds the session in memory and writes it back,
+      // so it reappears on both. Ours union theirs, and anything tombstoned is
+      // dropped even if this device is still holding it.
+      const tombstones = new Set([...this.deletedIds, ...(onDisk?.deleted ?? [])]);
+      for (const id of tombstones) this.deletedIds.add(id);
+
+      const merged = ours.filter((s) => !tombstones.has(s.id));
+      const known = new Set(this.sessions.keys());
+      for (const foreign of onDisk?.sessions ?? []) {
+        if (known.has(foreign.id) || tombstones.has(foreign.id)) continue;
+        merged.push(foreign);
+      }
+
+      // A tombstone must outlive every copy it is suppressing, and we cannot
+      // know when the last device has stopped holding one — so they are kept
+      // rather than expired. They are just ids, so the cost is small.
+      await this.app.vault.adapter.write(
+        STATE_PATH,
+        JSON.stringify({ version: 2, sessions: merged, deleted: [...tombstones] })
+      );
     } catch {
       // Persistence is best-effort.
     }
@@ -399,7 +431,13 @@ export class SessionStore {
 
   /** Restore sessions from disk, migrating pre-session state if present. */
   async load(): Promise<void> {
-    const restored = (await this.readSessions()) ?? (await this.readLegacySession());
+    const state = await this.readState();
+
+    // Carry tombstones forward, or a delete made on another device would be
+    // undone the moment this one saves.
+    for (const id of state?.deleted ?? []) this.deletedIds.add(id);
+
+    const restored = state?.sessions ?? (await this.readLegacySession());
 
     if (restored && restored.length > 0) {
       for (const record of restored) {
@@ -412,15 +450,19 @@ export class SessionStore {
     this.create();
   }
 
-  private async readSessions(): Promise<ChatSession[] | null> {
+  private async readState(): Promise<{ sessions: ChatSession[]; deleted: string[] } | null> {
     try {
       const raw = await this.app.vault.adapter.read(STATE_PATH);
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed?.sessions)) return null;
+      const deleted: string[] = Array.isArray(parsed.deleted)
+        ? parsed.deleted.filter((id: unknown): id is string => typeof id === "string")
+        : [];
       const sessions = parsed.sessions
         .map((s: unknown) => normalizeSession(s))
-        .filter((s: ChatSession | null): s is ChatSession => s !== null);
-      return sessions.length > 0 ? sessions : null;
+        .filter((s: ChatSession | null): s is ChatSession => s !== null)
+        .filter((s: ChatSession) => !deleted.includes(s.id));
+      return { sessions, deleted };
     } catch {
       return null;
     }
