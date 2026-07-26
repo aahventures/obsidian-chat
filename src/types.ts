@@ -108,12 +108,57 @@ export interface ToolResult {
   };
 }
 
+// ─── Chat Sessions ──────────────────────────────────────────────────────────
+
+/**
+ * A rendered chat message. This is the UI's view of the conversation, kept
+ * separate from the API's `UnifiedMessage` history, and replayed into a view
+ * when it binds to a session.
+ */
+export interface UiChatMessage {
+  type: "user" | "assistant" | "tool-call" | "error";
+  text?: string;
+  /** The tool_use id, used to match a result back to its call. */
+  toolId?: string;
+  toolName?: string;
+  toolInput?: Record<string, unknown>;
+  /** Set once the tool has returned; absent while the call is in flight. */
+  toolResult?: ToolResult;
+}
+
+/** One conversation, in the shape it is persisted. */
+export interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  uiMessages: UiChatMessage[];
+  agentMessages: UnifiedMessage[];
+  providerState: ProviderState;
+  /** Set while the agent is parked on an ask_user question. */
+  pendingQuestion: string | null;
+}
+
+/**
+ * Something that happened in a session. Emitted to whichever views are bound
+ * to it; the session's own state is updated regardless of whether anyone is
+ * listening, which is what lets a run continue while switched away.
+ */
+export type SessionEvent =
+  | { kind: "message"; message: UiChatMessage }
+  | { kind: "tool-result"; toolId: string; toolName: string; result: ToolResult }
+  | { kind: "thinking"; on: boolean }
+  | { kind: "ask-user"; question: string }
+  | { kind: "running"; running: boolean }
+  | { kind: "title"; title: string }
+  | { kind: "cleared" };
+
 // ─── Agent Loop Callbacks ───────────────────────────────────────────────────
 
 export interface AgentCallbacks {
   onThinking: () => void;
-  onToolCall: (name: string, input: Record<string, unknown>) => void;
-  onToolResult: (name: string, result: ToolResult) => void;
+  onToolCall: (id: string, name: string, input: Record<string, unknown>) => void;
+  onToolResult: (id: string, name: string, result: ToolResult) => void;
   onResponse: (text: string) => void;
   onAskUser: (question: string) => Promise<string>;
   onError: (error: string) => void;

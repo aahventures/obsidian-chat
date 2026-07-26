@@ -12,22 +12,23 @@ import type { ChatSettings, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
-import { AgentLoop } from "./agent/loop";
+import { SessionStore } from "./agent/sessions";
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
-  /** Shared agent loop that persists across view open/close cycles */
-  agent!: AgentLoop;
-  /** Chat messages for replaying into the UI when the view reopens */
-  chatHistory: Array<{ type: string; text?: string; toolName?: string; toolInput?: Record<string, unknown>; toolResult?: { result: string; isError: boolean } }> = [];
+  /**
+   * Owns every conversation and runs their turns. Lives on the plugin so a run
+   * survives its view being closed.
+   */
+  sessions!: SessionStore;
 
   async onload(): Promise<void> {
     await this.loadSettings();
 
-    this.agent = new AgentLoop(this.app, this.settings);
+    this.sessions = new SessionStore(this.app, this.settings);
 
-    // Restore persisted chat history
-    await this.loadChatHistory();
+    // Restore persisted sessions (migrating pre-session state if present)
+    await this.sessions.load();
 
     this.addSettingTab(new ChatSettingTab(this.app, this));
 
@@ -132,7 +133,10 @@ export default class ChatPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
-    await this.saveChatHistory();
+    // Unload is the only place runs are stopped wholesale — closing a view
+    // leaves its session running.
+    this.sessions.abortAll();
+    await this.sessions.save();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
   }
 
@@ -155,7 +159,9 @@ export default class ChatPlugin extends Plugin {
     await this.activateView();
     const view = this.getChatView();
     if (view) {
-      setTimeout(() => view.sendMessage(message), 100);
+      // Wait for the Svelte component to mount rather than guessing at a delay.
+      await view.whenReady;
+      view.sendMessage(message);
     }
   }
 
@@ -168,10 +174,9 @@ export default class ChatPlugin extends Plugin {
     await this.activateView();
     const view = this.getChatView();
     if (view) {
-      setTimeout(() => {
-        view.setSelection(selection);
-        view.focus();
-      }, 100);
+      await view.whenReady;
+      view.setSelection(selection);
+      view.focus();
     }
   }
 
@@ -191,6 +196,9 @@ export default class ChatPlugin extends Plugin {
 
     if (existing.length > 0) {
       workspace.revealLeaf(existing[0]);
+      // Views load deferred since v1.7.2; force it so callers awaiting
+      // `whenReady` cannot block on a view whose onOpen never ran.
+      await existing[0].loadIfDeferred();
       return;
     }
 
@@ -200,6 +208,7 @@ export default class ChatPlugin extends Plugin {
     if (leaf) {
       await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
       workspace.revealLeaf(leaf);
+      await leaf.loadIfDeferred();
     }
   }
 
@@ -241,40 +250,6 @@ export default class ChatPlugin extends Plugin {
       new Notice("Conversation cleared.");
     } else {
       new Notice("No active conversation.");
-    }
-  }
-
-  // ─── Chat history persistence ─────────────────────────────────────────
-
-  async saveChatHistory(): Promise<void> {
-    try {
-      const state = {
-        chatHistory: this.chatHistory.slice(-100), // Cap at 100 UI messages
-        agentMessages: this.agent.exportMessages().slice(-80), // Cap at 80 API messages
-      };
-      await this.app.vault.adapter.write(
-        ".obsidian/plugins/obsidian-chat/chat-state.json",
-        JSON.stringify(state)
-      );
-    } catch {
-      // Persistence is best-effort
-    }
-  }
-
-  private async loadChatHistory(): Promise<void> {
-    try {
-      const raw = await this.app.vault.adapter.read(
-        ".obsidian/plugins/obsidian-chat/chat-state.json"
-      );
-      const state = JSON.parse(raw);
-      if (Array.isArray(state.chatHistory)) {
-        this.chatHistory = state.chatHistory;
-      }
-      if (Array.isArray(state.agentMessages)) {
-        this.agent.importMessages(state.agentMessages);
-      }
-    } catch {
-      // No saved state or parse error — start fresh
     }
   }
 
