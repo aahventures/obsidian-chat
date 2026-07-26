@@ -18,13 +18,16 @@
     component: ObsidianComponent;
     provider: string;
     model: string;
+    /** Session title. Shown in the pane because sidebar tabs are icon-only. */
+    title: string;
     onSend: (text: string, selection: SelectionScope | null) => void;
     onClear: () => void;
     onStop: () => void;
   }
 
-  let { app, component, provider, model, onSend, onClear, onStop }: Props = $props();
+  let { app, component, provider, model, title, onSend, onClear, onStop }: Props = $props();
 
+  let displayTitle = $state("Chat");
   let displayModel = $state("");
   let messages = $state<ChatMessage[]>([]);
   let inputText = $state("");
@@ -37,9 +40,13 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // Sync model prop to local state (also updateable via setModel)
+  // Sync props to local state (also updateable via setModel / setTitle)
   $effect(() => {
     displayModel = model;
+  });
+
+  $effect(() => {
+    displayTitle = title;
   });
 
   // Auto-scroll when messages change
@@ -139,6 +146,11 @@
     displayModel = name;
   }
 
+  /** Update the session title shown in the header */
+  export function setTitle(name: string): void {
+    displayTitle = name || "Chat";
+  }
+
   /** Set the selection scope (shows pill in UI) */
   export function setSelection(sel: SelectionScope): void {
     selection = sel;
@@ -225,7 +237,7 @@
   <!-- Header -->
   <div class="ochat-header">
     <div class="ochat-header-left">
-      <span class="ochat-header-title">Chat</span>
+      <span class="ochat-header-title" title={displayTitle}>{displayTitle}</span>
       <span class="ochat-header-model">{displayModel || "No model"}</span>
     </div>
     <button class="ochat-clear-btn" onclick={onClear}>Clear</button>
@@ -371,12 +383,18 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
+    /* Let the title ellipsize rather than push the Clear button off the edge */
+    min-width: 0;
   }
 
   .ochat-header-title {
     font-weight: var(--font-weight-bold, 600);
     font-size: var(--font-ui-medium);
     color: var(--text-normal);
+    /* Session titles are derived from the first message, so they can be long */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ochat-header-model {
