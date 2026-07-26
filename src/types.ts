@@ -57,6 +57,25 @@ export interface UnifiedResponse {
   };
 }
 
+// ─── Provider State ─────────────────────────────────────────────────────────
+
+/**
+ * Per-conversation state held on the provider's side.
+ *
+ * OpenAI's Responses API keeps conversation state server-side and is chained
+ * via `previous_response_id`, so this must be scoped to a single conversation.
+ * Sharing one instance across conversations splices them together server-side.
+ * Anthropic and custom (OpenAI-compatible) providers are stateless and ignore it.
+ */
+export interface ProviderState {
+  previousResponseId: string | null;
+}
+
+/** A fresh, unchained provider state. */
+export function createProviderState(): ProviderState {
+  return { previousResponseId: null };
+}
+
 // ─── Conversation Context ───────────────────────────────────────────────────
 
 export interface ConversationContext {
