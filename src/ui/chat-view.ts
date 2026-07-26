@@ -104,6 +104,7 @@ export class ObsidianChatView extends ItemView {
         component: this,
         provider: this.plugin.settings.provider,
         model: getModelDisplayName(this.plugin.settings.provider, this.plugin.settings.model),
+        title: session.title,
         onSend: (text: string, selection: SelectionScope | null) =>
           this.handleUserMessage(text, selection),
         onClear: () => this.handleClear(),
@@ -201,6 +202,7 @@ export class ObsidianChatView extends ItemView {
 
     chat.clearMessages();
     chat.clearInput();
+    chat.setTitle(session.title);
     this.toolRows.clear();
 
     for (const msg of session.uiMessages) {
@@ -291,7 +293,10 @@ export class ObsidianChatView extends ItemView {
         break;
 
       case "title":
-        // Retitle the tab header now the session has a real name.
+        // Retitle both the pane header and the tab. The pane header is what
+        // actually identifies a session in the sidebar, where the tab bar
+        // renders icons only.
+        chat.setTitle(event.title);
         this.refreshHeader();
         break;
     }

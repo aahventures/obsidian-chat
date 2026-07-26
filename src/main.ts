@@ -13,6 +13,7 @@ import type { ChatSettings, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
+import { SessionSwitcherModal } from "./ui/session-switcher";
 import { SessionStore } from "./agent/sessions";
 
 export default class ChatPlugin extends Plugin {
@@ -50,6 +51,12 @@ export default class ChatPlugin extends Plugin {
           })
         );
         menu.addItem((item) =>
+          item
+            .setTitle("Switch chat")
+            .setIcon("list")
+            .onClick(() => this.openSessionSwitcher())
+        );
+        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
@@ -75,6 +82,12 @@ export default class ChatPlugin extends Plugin {
       callback: () => {
         void this.newChat();
       },
+    });
+
+    this.addCommand({
+      id: "switch-chat",
+      name: "Switch chat",
+      callback: () => this.openSessionSwitcher(),
     });
 
     this.addCommand({
@@ -185,9 +198,22 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
-  /** Open a NEW conversation scoped to a selection (user types their own question) */
+  /**
+   * Scope the CURRENT conversation to a selection — the user types their own
+   * question next.
+   *
+   * Deliberately not a new conversation. Quoting a passage into the chat you
+   * are already in is how every chat app behaves, and since a new session now
+   * takes over the pane rather than opening its own, starting one here would be
+   * indistinguishable from clearing the conversation you were looking at.
+   * Whoever wants a clean slate can press "New chat" first.
+   */
   private async openChatWithSelection(selection: SelectionScope): Promise<void> {
-    const view = await this.newChat();
+    if (!this.settings.apiKey) {
+      new Notice("Please configure your API key in Obsidian Chat settings.");
+      return;
+    }
+    const view = await this.activateView();
     if (view) {
       await view.whenReady;
       view.setSelection(selection);
@@ -207,9 +233,11 @@ export default class ChatPlugin extends Plugin {
   /**
    * Reveal the pane showing `sessionId`, or open one.
    *
-   * The first chat pane goes in the right sidebar, preserving existing
-   * behaviour and keeping mobile sensible. Additional sessions open as
-   * workspace tabs, which is what makes splitting and popping out work.
+   * All chat panes go in the right sidebar, so "New chat" always lands
+   * somewhere predictable. `getLeaf("tab")` was tried here and follows focus:
+   * the same command opened a sidebar pane or a main-area tab depending on
+   * what happened to be focused. The user can still drag a pane out to the
+   * main area, split it, or pop it out afterwards.
    */
   private async activateView(sessionId?: string): Promise<ObsidianChatView | null> {
     const { workspace } = this.app;
@@ -227,15 +255,20 @@ export default class ChatPlugin extends Plugin {
 
     const chatLeaves = workspace.getLeavesOfType(VIEW_TYPE_CHAT);
 
-    // Reuse the only pane when no particular session was asked for.
+    // No particular session asked for: show the pane holding the most recently
+    // updated session rather than whichever leaf Obsidian happens to list
+    // first, which with several panes open always snapped to the same one.
     if (!sessionId && chatLeaves.length > 0) {
-      workspace.revealLeaf(chatLeaves[0]);
-      await chatLeaves[0].loadIfDeferred();
-      return chatLeaves[0].view instanceof ObsidianChatView ? chatLeaves[0].view : null;
+      const leaf = this.mostRecentChatLeaf(chatLeaves) ?? chatLeaves[0];
+      workspace.revealLeaf(leaf);
+      await leaf.loadIfDeferred();
+      return leaf.view instanceof ObsidianChatView ? leaf.view : null;
     }
 
-    const leaf =
-      chatLeaves.length === 0 ? workspace.getRightLeaf(false) : workspace.getLeaf("tab");
+    // Never splits: this is only reached when no chat pane exists, since
+    // `revealSession()` rebinds an open one rather than opening another. Users
+    // can still split manually, and each leaf keeps its own session.
+    const leaf = workspace.getRightLeaf(false);
     if (!leaf) return null;
 
     await leaf.setViewState({
@@ -266,6 +299,71 @@ export default class ChatPlugin extends Plugin {
     return null;
   }
 
+  /** Of the given chat leaves, the one showing the most recently updated session. */
+  private mostRecentChatLeaf(leaves: WorkspaceLeaf[]): WorkspaceLeaf | null {
+    let best: WorkspaceLeaf | null = null;
+    let bestUpdated = -Infinity;
+
+    for (const leaf of leaves) {
+      const view = leaf.view;
+      const id =
+        view instanceof ObsidianChatView
+          ? view.getSessionId()
+          : ((leaf.getViewState().state as { sessionId?: unknown } | undefined)?.sessionId as
+              | string
+              | undefined);
+      if (typeof id !== "string") continue;
+
+      const updated = this.sessions.get(id)?.updatedAt;
+      if (updated !== undefined && updated > bestUpdated) {
+        bestUpdated = updated;
+        best = leaf;
+      }
+    }
+
+    return best;
+  }
+
+  /**
+   * Bring a session on screen: reveal the pane already showing it, otherwise
+   * rebind the pane the user is looking at, otherwise open a new pane.
+   *
+   * Rebinding rather than always opening a pane is what keeps closed sessions
+   * reachable without accumulating panes — and two panes never end up on the
+   * same conversation, because an existing pane is revealed instead.
+   */
+  async revealSession(sessionId: string): Promise<ObsidianChatView | null> {
+    if (!this.sessions.has(sessionId)) {
+      new Notice("That chat no longer exists.");
+      return null;
+    }
+
+    const existing = this.findLeafForSession(sessionId);
+    if (existing) {
+      this.app.workspace.revealLeaf(existing);
+      await existing.loadIfDeferred();
+      return existing.view instanceof ObsidianChatView ? existing.view : null;
+    }
+
+    const active = this.getChatView();
+    if (active) {
+      this.app.workspace.revealLeaf(active.leaf);
+      active.bindTo(sessionId);
+      // getState() is what persists the binding, so ask for a layout save or a
+      // restart would restore the pane's previous session.
+      this.app.workspace.requestSaveLayout();
+      active.focus();
+      return active;
+    }
+
+    return this.activateView(sessionId);
+  }
+
+  /** Whether some pane is currently showing this session. */
+  isSessionOpen(sessionId: string): boolean {
+    return this.findLeafForSession(sessionId) !== null;
+  }
+
   /** Sessions currently displayed by some pane, optionally ignoring one view. */
   openSessionIds(except?: ObsidianChatView): Set<string> {
     const ids = new Set<string>();
@@ -279,6 +377,15 @@ export default class ChatPlugin extends Plugin {
     return ids;
   }
 
+  /** Show the session picker. */
+  openSessionSwitcher(): void {
+    if (this.sessions.list().length === 0) {
+      new Notice("No chats yet.");
+      return;
+    }
+    new SessionSwitcherModal(this).open();
+  }
+
   /** Start a fresh conversation in its own pane. */
   async newChat(): Promise<ObsidianChatView | null> {
     if (!this.settings.apiKey) {
@@ -286,7 +393,9 @@ export default class ChatPlugin extends Plugin {
       return null;
     }
     const session = this.sessions.create();
-    return this.activateView(session.id);
+    // Takes over the pane you are looking at rather than splitting the sidebar.
+    // Only reasonable because the switcher can reach the old conversation.
+    return this.revealSession(session.id);
   }
 
   /**
