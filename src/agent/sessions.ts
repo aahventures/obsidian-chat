@@ -59,6 +59,11 @@ export class SessionStore {
   private settings: ChatSettings;
   private sessions = new Map<string, LiveSession>();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Sessions deleted in this run. Tracked so the merge in `save()` cannot
+   * resurrect them from a copy of the file written before the delete.
+   */
+  private deletedIds = new Set<string>();
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -117,6 +122,7 @@ export class SessionStore {
     session.loop.abort();
     session.listeners.clear();
     this.sessions.delete(id);
+    this.deletedIds.add(id);
     this.scheduleSave();
   }
 
@@ -363,18 +369,32 @@ export class SessionStore {
       this.saveTimer = null;
     }
     try {
-      const payload = {
-        version: 2,
-        sessions: [...this.sessions.values()].map((session) => {
-          this.syncFromLoop(session);
-          return {
-            ...session.record,
-            uiMessages: session.record.uiMessages.slice(-MAX_UI_MESSAGES),
-            agentMessages: session.record.agentMessages.slice(-MAX_AGENT_MESSAGES),
-          };
-        }),
-      };
-      await this.app.vault.adapter.write(STATE_PATH, JSON.stringify(payload));
+      const ours: ChatSession[] = [...this.sessions.values()].map((session) => {
+        this.syncFromLoop(session);
+        return {
+          ...session.record,
+          uiMessages: session.record.uiMessages.slice(-MAX_UI_MESSAGES),
+          agentMessages: session.record.agentMessages.slice(-MAX_AGENT_MESSAGES),
+        };
+      });
+
+      // This file lives next to data.json in the plugin folder, so it syncs
+      // between devices. Re-read before writing and keep any session we do not
+      // know about, otherwise this device's view of the world would silently
+      // delete conversations another device created since we last loaded.
+      // Sessions we do hold are ours to overwrite; a genuine concurrent edit to
+      // the SAME conversation on two devices still resolves last-write-wins.
+      const merged = [...ours];
+      const known = new Set(this.sessions.keys());
+      for (const foreign of (await this.readSessions()) ?? []) {
+        if (known.has(foreign.id) || this.deletedIds.has(foreign.id)) continue;
+        merged.push(foreign);
+      }
+
+      await this.app.vault.adapter.write(
+        STATE_PATH,
+        JSON.stringify({ version: 2, sessions: merged })
+      );
     } catch {
       // Persistence is best-effort.
     }

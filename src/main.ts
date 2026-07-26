@@ -7,6 +7,7 @@ import {
   Menu,
   TFile,
   type TAbstractFile,
+  type WorkspaceLeaf,
 } from "obsidian";
 import type { ChatSettings, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
@@ -44,6 +45,11 @@ export default class ChatPlugin extends Plugin {
           item.setTitle("Open chat").setIcon("message-circle").onClick(() => this.openChat())
         );
         menu.addItem((item) =>
+          item.setTitle("New chat").setIcon("plus").onClick(() => {
+            void this.newChat();
+          })
+        );
+        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
@@ -64,6 +70,14 @@ export default class ChatPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "new-chat",
+      name: "New chat",
+      callback: () => {
+        void this.newChat();
+      },
+    });
+
+    this.addCommand({
       id: "copy-transcript",
       name: "Copy conversation transcript to clipboard",
       callback: () => this.shareTranscript(),
@@ -73,6 +87,12 @@ export default class ChatPlugin extends Plugin {
       id: "clear-chat",
       name: "Clear conversation",
       callback: () => this.clearChat(),
+    });
+
+    this.addCommand({
+      id: "delete-chat",
+      name: "Delete this chat",
+      callback: () => this.deleteCurrentChat(),
     });
 
     // Editor command: chat about the current note (only when editor is active)
@@ -150,14 +170,14 @@ export default class ChatPlugin extends Plugin {
     await this.activateView();
   }
 
-  /** Open chat and immediately send a message */
+  /**
+   * Open a NEW conversation and immediately send a message.
+   *
+   * Starting fresh rather than appending is deliberate: asking about a note
+   * should not inherit whatever unrelated context the last conversation had.
+   */
   private async openChatWithMessage(message: string): Promise<void> {
-    if (!this.settings.apiKey) {
-      new Notice("Please configure your API key in Obsidian Chat settings.");
-      return;
-    }
-    await this.activateView();
-    const view = this.getChatView();
+    const view = await this.newChat();
     if (view) {
       // Wait for the Svelte component to mount rather than guessing at a delay.
       await view.whenReady;
@@ -165,14 +185,9 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
-  /** Open chat with a selection scope (shows pill, user types their own question) */
+  /** Open a NEW conversation scoped to a selection (user types their own question) */
   private async openChatWithSelection(selection: SelectionScope): Promise<void> {
-    if (!this.settings.apiKey) {
-      new Notice("Please configure your API key in Obsidian Chat settings.");
-      return;
-    }
-    await this.activateView();
-    const view = this.getChatView();
+    const view = await this.newChat();
     if (view) {
       await view.whenReady;
       view.setSelection(selection);
@@ -189,38 +204,111 @@ export default class ChatPlugin extends Plugin {
     this.openChatWithMessage(`Tell me about ${file.path}`);
   }
 
-  /** Open or reveal the chat view in the right sidebar (both desktop and mobile). */
-  private async activateView(): Promise<void> {
+  /**
+   * Reveal the pane showing `sessionId`, or open one.
+   *
+   * The first chat pane goes in the right sidebar, preserving existing
+   * behaviour and keeping mobile sensible. Additional sessions open as
+   * workspace tabs, which is what makes splitting and popping out work.
+   */
+  private async activateView(sessionId?: string): Promise<ObsidianChatView | null> {
     const { workspace } = this.app;
-    const existing = workspace.getLeavesOfType(VIEW_TYPE_CHAT);
 
-    if (existing.length > 0) {
-      workspace.revealLeaf(existing[0]);
-      // Views load deferred since v1.7.2; force it so callers awaiting
-      // `whenReady` cannot block on a view whose onOpen never ran.
-      await existing[0].loadIfDeferred();
-      return;
+    if (sessionId) {
+      const existing = this.findLeafForSession(sessionId);
+      if (existing) {
+        workspace.revealLeaf(existing);
+        // Views load deferred since v1.7.2; force it so callers awaiting
+        // `whenReady` cannot block on a view whose onOpen never ran.
+        await existing.loadIfDeferred();
+        return existing.view instanceof ObsidianChatView ? existing.view : null;
+      }
     }
 
-    // Right sidebar on both desktop and mobile.
-    // On mobile, this slides in as a panel from the right edge.
-    const leaf = workspace.getRightLeaf(false);
-    if (leaf) {
-      await leaf.setViewState({ type: VIEW_TYPE_CHAT, active: true });
-      workspace.revealLeaf(leaf);
-      await leaf.loadIfDeferred();
+    const chatLeaves = workspace.getLeavesOfType(VIEW_TYPE_CHAT);
+
+    // Reuse the only pane when no particular session was asked for.
+    if (!sessionId && chatLeaves.length > 0) {
+      workspace.revealLeaf(chatLeaves[0]);
+      await chatLeaves[0].loadIfDeferred();
+      return chatLeaves[0].view instanceof ObsidianChatView ? chatLeaves[0].view : null;
     }
+
+    const leaf =
+      chatLeaves.length === 0 ? workspace.getRightLeaf(false) : workspace.getLeaf("tab");
+    if (!leaf) return null;
+
+    await leaf.setViewState({
+      type: VIEW_TYPE_CHAT,
+      active: true,
+      state: sessionId ? { sessionId } : undefined,
+    });
+    workspace.revealLeaf(leaf);
+    await leaf.loadIfDeferred();
+    return leaf.view instanceof ObsidianChatView ? leaf.view : null;
   }
 
-  /** Get the active ObsidianChatView using proper instanceof check (deferred view safe) */
+  /**
+   * The leaf showing a session, if one is open.
+   *
+   * Reads the leaf's view state rather than the view object so it works for
+   * deferred leaves that have not been constructed yet.
+   */
+  private findLeafForSession(sessionId: string): WorkspaceLeaf | null {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+      const view = leaf.view;
+      if (view instanceof ObsidianChatView && view.getSessionId() === sessionId) {
+        return leaf;
+      }
+      const state = leaf.getViewState().state as { sessionId?: unknown } | undefined;
+      if (state?.sessionId === sessionId) return leaf;
+    }
+    return null;
+  }
+
+  /** Sessions currently displayed by some pane, optionally ignoring one view. */
+  openSessionIds(except?: ObsidianChatView): Set<string> {
+    const ids = new Set<string>();
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+      const view = leaf.view;
+      if (view instanceof ObsidianChatView && view !== except) {
+        const id = view.getSessionId();
+        if (id) ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  /** Start a fresh conversation in its own pane. */
+  async newChat(): Promise<ObsidianChatView | null> {
+    if (!this.settings.apiKey) {
+      new Notice("Please configure your API key in Obsidian Chat settings.");
+      return null;
+    }
+    const session = this.sessions.create();
+    return this.activateView(session.id);
+  }
+
+  /** Get the chat view the user is looking at, else any open one. */
   private getChatView(): ObsidianChatView | null {
-    const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT);
-    for (const leaf of leaves) {
+    const active = this.app.workspace.getActiveViewOfType(ObsidianChatView);
+    if (active) return active;
+
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
       if (leaf.view instanceof ObsidianChatView) {
         return leaf.view;
       }
     }
     return null;
+  }
+
+  /** Every open chat view. */
+  private getChatViews(): ObsidianChatView[] {
+    const views: ObsidianChatView[] = [];
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE_CHAT)) {
+      if (leaf.view instanceof ObsidianChatView) views.push(leaf.view);
+    }
+    return views;
   }
 
   private shareTranscript(): void {
@@ -253,6 +341,21 @@ export default class ChatPlugin extends Plugin {
     }
   }
 
+  /** Delete the current conversation and close the pane showing it. */
+  private deleteCurrentChat(): void {
+    const view = this.getChatView();
+    const sessionId = view?.getSessionId();
+    if (!view || !sessionId) {
+      new Notice("No active conversation.");
+      return;
+    }
+
+    const title = this.sessions.get(sessionId)?.title ?? "chat";
+    this.sessions.delete(sessionId);
+    view.leaf.detach();
+    new Notice(`Deleted "${title}".`);
+  }
+
   // ─── Settings persistence ────────────────────────────────────────────
 
   async loadSettings(): Promise<void> {
@@ -276,10 +379,11 @@ export default class ChatPlugin extends Plugin {
     const toSave = { ...this.settings, apiKey: "" };
     await this.saveData(toSave);
 
-    // Update the chat view header with the new model name
-    this.getChatView()?.updateModel(
-      getModelDisplayName(this.settings.provider, this.settings.model)
-    );
+    // Update every open chat pane's header with the new model name
+    const modelName = getModelDisplayName(this.settings.provider, this.settings.model);
+    for (const view of this.getChatViews()) {
+      view.updateModel(modelName);
+    }
   }
 
   /** Load the correct API key when provider changes */
