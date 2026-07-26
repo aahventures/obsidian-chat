@@ -37,9 +37,6 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // ask_user support
-  let askUserResolve: ((value: string) => void) | null = $state(null);
-
   // Sync model prop to local state (also updateable via setModel)
   $effect(() => {
     displayModel = model;
@@ -97,15 +94,18 @@
     messages.push({ id: nextId++, type: "error", text });
   }
 
-  export function showAskUser(question: string): Promise<string> {
-    addAssistantMessage(question);
+  /**
+   * Invite an answer to a pending ask_user question.
+   *
+   * The question itself is rendered as a normal assistant message by whoever
+   * owns the conversation, and the answer is routed back through `onSend` like
+   * any other input — the component holds no promise resolver of its own, so a
+   * question can outlive this component being unmounted.
+   */
+  export function promptAnswer(): void {
     placeholder = "Type your answer...";
     inputEnabled = true;
     textareaEl?.focus();
-
-    return new Promise<string>((resolve) => {
-      askUserResolve = resolve;
-    });
   }
 
   export function setInputEnabled(enabled: boolean): void {
@@ -151,14 +151,6 @@
 
     inputText = "";
     resetHeight();
-
-    if (askUserResolve) {
-      addUserMessage(text);
-      const resolve = askUserResolve;
-      askUserResolve = null;
-      resolve(text);
-      return;
-    }
 
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;

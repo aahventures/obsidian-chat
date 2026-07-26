@@ -223,7 +223,7 @@ export class AgentLoop {
       }
 
       // Emit any text before tool calls (skip if ask_user is coming to avoid
-      // rendering the question twice: once as text and once via showAskUser)
+      // rendering the question twice: once as text and once via onAskUser)
       const hasAskUser = toolCalls.some((tc) => tc.name === "ask_user");
       if (textParts.length > 0 && toolCalls.length > 0 && !hasAskUser) {
         callbacks.onResponse(textParts.join(""));
@@ -243,10 +243,15 @@ export class AgentLoop {
       // Execute tool calls and collect results
       const resultBlocks: ContentBlock[] = [];
 
-      for (const tc of toolCalls) {
+      for (let t = 0; t < toolCalls.length; t++) {
+        const tc = toolCalls[t];
         if (this.aborted) return;
 
-        callbacks.onToolCall(tc.name!, tc.input!);
+        // Providers should always supply an id; fall back to a synthetic one so
+        // a result can still be matched to its call in the UI.
+        const toolId = tc.id || `${tc.name}-${i}-${t}`;
+
+        callbacks.onToolCall(toolId, tc.name!, tc.input!);
 
         const result = await executeTool(
           this.app,
@@ -255,7 +260,7 @@ export class AgentLoop {
           callbacks.onAskUser
         );
 
-        callbacks.onToolResult(tc.name!, result);
+        callbacks.onToolResult(toolId, tc.name!, result);
 
         resultBlocks.push({
           type: "tool_result",

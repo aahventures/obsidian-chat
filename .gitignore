@@ -5,5 +5,10 @@ dist/
 data.json
 debug.log
 
+# Plugin state, written into the plugin folder — which is a symlink to this
+# repo in a dev sandbox. Both names: the migration still reads the legacy one.
+chat-sessions.json
+chat-state.json
+
 # Clawpatch local review state
 .clawpatch/
