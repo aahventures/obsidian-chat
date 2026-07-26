@@ -5,39 +5,34 @@ import type {
   UnifiedToolDef,
   UnifiedResponse,
   ContentBlock,
+  ProviderState,
 } from "../types";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
-
-/**
- * Stores raw output items from each API response so they can be replayed
- * verbatim in subsequent requests. The Responses API requires exact
- * function_call items (with all fields) when sending function_call_output.
- */
-let previousResponseId: string | null = null;
-
-/** Clear stored state (call on conversation clear) */
-export function clearOpenAIState(): void {
-  previousResponseId = null;
-}
 
 /**
  * Sends a message to OpenAI via the Responses API (/v1/responses).
  * Uses the `previous_response_id` field for multi-turn, which lets
  * OpenAI manage conversation state server-side and avoids us having to
  * reconstruct function_call items.
+ *
+ * `providerState` is read and mutated in place, and MUST belong to exactly one
+ * conversation. Two conversations sharing it would chain onto each other's
+ * server-side history — silently, since a chained request only sends the
+ * latest turn.
  */
 export async function sendOpenAIMessage(
   settings: ChatSettings,
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
-  systemPrompt: string
+  systemPrompt: string,
+  providerState: ProviderState
 ): Promise<UnifiedResponse> {
   const baseUrl = DEFAULT_OPENAI_URL;
   const model = settings.model || "gpt-5.3-codex";
 
   // Build input: only the NEW items for this turn
-  const input = buildCurrentTurnInput(messages, systemPrompt);
+  const input = buildCurrentTurnInput(messages, systemPrompt, providerState);
 
   const body: Record<string, unknown> = {
     model,
@@ -45,8 +40,8 @@ export async function sendOpenAIMessage(
   };
 
   // Chain to previous response for multi-turn context
-  if (previousResponseId) {
-    body.previous_response_id = previousResponseId;
+  if (providerState.previousResponseId) {
+    body.previous_response_id = providerState.previousResponseId;
   }
 
   // Reasoning for reasoning-capable models
@@ -103,7 +98,7 @@ export async function sendOpenAIMessage(
   const data = response.json;
 
   // Store response ID for chaining
-  previousResponseId = data.id || null;
+  providerState.previousResponseId = data.id || null;
 
   return fromResponsesOutput(data);
 }
@@ -119,12 +114,13 @@ export async function sendOpenAIMessage(
  */
 function buildCurrentTurnInput(
   messages: UnifiedMessage[],
-  systemPrompt: string
+  systemPrompt: string,
+  providerState: ProviderState
 ): Record<string, unknown>[] {
   const items: Record<string, unknown>[] = [];
 
   // If no previous response (first call), include all messages
-  if (!previousResponseId) {
+  if (!providerState.previousResponseId) {
     items.push({
       type: "message",
       role: "developer",

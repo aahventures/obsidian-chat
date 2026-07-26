@@ -5,9 +5,10 @@ import type {
   ContentBlock,
   AgentCallbacks,
   SelectionScope,
+  ProviderState,
 } from "../types";
+import { createProviderState } from "../types";
 import { sendMessage } from "../api/client";
-import { clearOpenAIState } from "../api/openai";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
@@ -46,6 +47,8 @@ export class AgentLoop {
   private app: App;
   private settings: ChatSettings;
   private aborted = false;
+  /** Provider-side conversation state, owned by this loop alone. */
+  private providerState: ProviderState = createProviderState();
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -61,7 +64,7 @@ export class AgentLoop {
   clear(): void {
     this.messages = [];
     this.aborted = false;
-    clearOpenAIState();
+    this.providerState = createProviderState();
   }
 
   /** Export API messages for persistence */
@@ -72,6 +75,16 @@ export class AgentLoop {
   /** Restore API messages from persistence */
   importMessages(messages: UnifiedMessage[]): void {
     this.messages = messages;
+  }
+
+  /** Export provider-side state for persistence */
+  exportProviderState(): ProviderState {
+    return this.providerState;
+  }
+
+  /** Restore provider-side state from persistence */
+  importProviderState(state: ProviderState): void {
+    this.providerState = state;
   }
 
   /** Export the full conversation as a readable markdown transcript */
@@ -183,7 +196,8 @@ export class AgentLoop {
           this.settings,
           this.messages,
           TOOL_DEFINITIONS,
-          systemPrompt
+          systemPrompt,
+          this.providerState
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);

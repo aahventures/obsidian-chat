@@ -1,4 +1,10 @@
-import type { ChatSettings, UnifiedMessage, UnifiedToolDef, UnifiedResponse } from "../types";
+import type {
+  ChatSettings,
+  UnifiedMessage,
+  UnifiedToolDef,
+  UnifiedResponse,
+  ProviderState,
+} from "../types";
 import { sendAnthropicMessage } from "./anthropic";
 import { sendOpenAIMessage } from "./openai";
 import { sendCustomMessage } from "./custom";
@@ -6,12 +12,18 @@ import { sendCustomMessage } from "./custom";
 /**
  * Dispatches a message to the appropriate provider adapter.
  * Handles single retry on 429 (rate limit) with exponential backoff.
+ *
+ * `providerState` carries per-conversation provider-side state and is mutated
+ * in place. Each conversation must own its own — see `ProviderState`. Callers
+ * that are not a conversation (e.g. the settings "Test" button) should pass a
+ * throwaway `createProviderState()` so they cannot disturb a real one.
  */
 export async function sendMessage(
   settings: ChatSettings,
   messages: UnifiedMessage[],
   tools: UnifiedToolDef[],
-  systemPrompt: string
+  systemPrompt: string,
+  providerState: ProviderState
 ): Promise<UnifiedResponse> {
   const doSend = () => {
     if (settings.provider === "anthropic") {
@@ -20,7 +32,7 @@ export async function sendMessage(
     if (settings.provider === "custom") {
       return sendCustomMessage(settings, messages, tools, systemPrompt);
     }
-    return sendOpenAIMessage(settings, messages, tools, systemPrompt);
+    return sendOpenAIMessage(settings, messages, tools, systemPrompt, providerState);
   };
 
   try {

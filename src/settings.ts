@@ -1,6 +1,7 @@
 import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
+import { createProviderState } from "./types";
 
 interface ModelOption {
   value: string;
@@ -123,11 +124,14 @@ export class ChatSettingTab extends PluginSettingTab {
           button.setDisabled(true);
           try {
             const { sendMessage } = await import("./api/client");
+            // Throwaway provider state: a connection test must not chain onto
+            // (or hijack) the conversation's server-side history.
             const response = await sendMessage(
               s,
               [{ role: "user", content: "Say hello in one word." }],
               [],
-              "You are a test. Respond with one word."
+              "You are a test. Respond with one word.",
+              createProviderState()
             );
             const text = response.content
               .filter((b) => b.type === "text")
