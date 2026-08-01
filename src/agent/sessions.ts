@@ -64,6 +64,17 @@ export class SessionStore {
    * resurrect them from a copy of the file written before the delete.
    */
   private deletedIds = new Set<string>();
+  /** Set at unload so teardown cannot rewrite the file after the final save. */
+  private suspended = false;
+
+  /**
+   * Whether a session is worth persisting. Set by the plugin, which is the
+   * only thing that knows about panes; the store stays pane-agnostic.
+   *
+   * Emptiness alone is the wrong rule: an unused session with a pane open must
+   * still be saved, or that pane loses its binding across a restart.
+   */
+  shouldRetain: (session: ChatSession) => boolean = () => true;
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -91,6 +102,19 @@ export class SessionStore {
 
   isRunning(id: string): boolean {
     return this.sessions.get(id)?.running ?? false;
+  }
+
+  /**
+   * Nothing has been said in this session and nothing is happening in it.
+   *
+   * A turn always appends the user's message before running, so checking
+   * `running` and `askResolve` is belt-and-braces — but it makes the promise
+   * explicit: an unused chat is never one with work in flight.
+   */
+  isEmpty(id: string): boolean {
+    const session = this.sessions.get(id);
+    if (!session) return false;
+    return session.record.uiMessages.length === 0 && !session.running && !session.askResolve;
   }
 
   /** The question the agent is waiting on, if any. */
@@ -372,7 +396,24 @@ export class SessionStore {
 
   // ─── Persistence ──────────────────────────────────────────────────────────
 
+  /**
+   * Stop persisting. Called at unload once the final save has landed.
+   *
+   * Detaching panes runs `onClose` for each, which discards abandoned sessions
+   * and schedules a save. Without this that debounced write lands ~500ms after
+   * the plugin is gone — and by then no pane is open, so `shouldRetain` rejects
+   * every empty session and the file loses what was just correctly saved.
+   */
+  suspendPersistence(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.suspended = true;
+  }
+
   private scheduleSave(): void {
+    if (this.suspended) return;
     if (this.saveTimer) clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -386,14 +427,18 @@ export class SessionStore {
       this.saveTimer = null;
     }
     try {
-      const ours: ChatSession[] = [...this.sessions.values()].map((session) => {
+      const ours: ChatSession[] = [];
+      for (const session of this.sessions.values()) {
         this.syncFromLoop(session);
-        return {
+        // Skip sessions not worth keeping — an unused "New chat" would
+        // otherwise become a permanent, untitled entry in the switcher.
+        if (!this.shouldRetain(session.record)) continue;
+        ours.push({
           ...session.record,
           uiMessages: session.record.uiMessages.slice(-MAX_UI_MESSAGES),
           agentMessages: session.record.agentMessages.slice(-MAX_AGENT_MESSAGES),
-        };
-      });
+        });
+      }
 
       // This file lives next to data.json in the plugin folder, so it syncs
       // between devices. Re-read before writing and keep any session we do not
