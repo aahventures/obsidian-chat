@@ -29,6 +29,12 @@ export default class ChatPlugin extends Plugin {
 
     this.sessions = new SessionStore(this.app, this.settings);
 
+    // Don't persist an unused "New chat". Keeping it would leave a permanent,
+    // untitled entry in the switcher for every press of the command. An empty
+    // session with a pane open IS kept, so the pane survives a restart.
+    this.sessions.shouldRetain = (session) =>
+      session.uiMessages.length > 0 || this.isSessionOpen(session.id);
+
     // Restore persisted sessions (migrating pre-session state if present)
     await this.sessions.load();
 
@@ -170,6 +176,11 @@ export default class ChatPlugin extends Plugin {
     // leaves its session running.
     this.sessions.abortAll();
     await this.sessions.save();
+    // Detaching runs every pane's onClose, which discards abandoned sessions
+    // and schedules a save. Stop persisting first so that cannot undo the save
+    // above — a pane closing because the plugin is unloading is not the user
+    // abandoning a chat.
+    this.sessions.suspendPersistence();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
   }
 
@@ -347,12 +358,17 @@ export default class ChatPlugin extends Plugin {
 
     const active = this.getChatView();
     if (active) {
+      const previous = active.getSessionId();
       this.app.workspace.revealLeaf(active.leaf);
       active.bindTo(sessionId);
       // getState() is what persists the binding, so ask for a layout save or a
       // restart would restore the pane's previous session.
       this.app.workspace.requestSaveLayout();
       active.focus();
+      // Switching away from an untouched "New chat" abandons it.
+      if (previous && previous !== sessionId) {
+        this.discardIfAbandoned(previous, active);
+      }
       return active;
     }
 
@@ -362,6 +378,20 @@ export default class ChatPlugin extends Plugin {
   /** Whether some pane is currently showing this session. */
   isSessionOpen(sessionId: string): boolean {
     return this.findLeafForSession(sessionId) !== null;
+  }
+
+  /**
+   * Drop a session a pane is abandoning, if nothing was ever said in it and no
+   * other pane is showing it.
+   *
+   * This does not weaken "runs outlive views" — a session with an in-flight
+   * turn, a pending question, or any message at all is never touched. It only
+   * stops an unused "New chat" lingering in the switcher.
+   */
+  discardIfAbandoned(sessionId: string, leaving: ObsidianChatView): void {
+    if (!this.sessions.isEmpty(sessionId)) return;
+    if (this.openSessionIds(leaving).has(sessionId)) return;
+    this.sessions.delete(sessionId);
   }
 
   /** Sessions currently displayed by some pane, optionally ignoring one view. */

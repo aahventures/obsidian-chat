@@ -133,6 +133,13 @@ export class ObsidianChatView extends ItemView {
       this.chatContainer = undefined;
     }
     this.toolRows.clear();
+
+    // An untouched "New chat" this pane was the only window onto is not worth
+    // keeping. Anything with a message, a running turn, or a pending question
+    // is left alone.
+    if (this.sessionId) {
+      this.plugin.discardIfAbandoned(this.sessionId, this);
+    }
   }
 
   /** Export the full transcript for sharing */
