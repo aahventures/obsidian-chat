@@ -95,7 +95,7 @@ async function readDocument(
 
   // cachedRead() is faster for display-only reads
   const content = await app.vault.cachedRead(file);
-  return { result: `# ${file.path}\n\n${content}`, isError: false };
+  return { result: `# ${file.path}\n\n${content}`, isError: false, path: file.path };
 }
 
 async function editDocument(
@@ -117,7 +117,7 @@ async function editDocument(
   switch (operation) {
     case "replace_all":
       await app.vault.modify(file, content);
-      return { result: `Replaced all content in ${file.path}.`, isError: false };
+      return { result: `Replaced all content in ${file.path}.`, isError: false, path: file.path };
 
     case "find_replace": {
       if (!find) {
@@ -152,6 +152,7 @@ async function editDocument(
       return {
         result: `${resultMsg}Successfully replaced text in ${file.path}.`,
         isError: false,
+        path: file.path,
         // Diff is just the changed snippets — never the whole file.
         diff: { path: file.path, before: find, after: content },
       };
@@ -182,7 +183,7 @@ async function editDocument(
         return { result: `Unknown position: ${position}`, isError: true };
       }
 
-      return { result: `Inserted content at ${position} of ${file.path}.`, isError: false };
+      return { result: `Inserted content at ${position} of ${file.path}.`, isError: false, path: file.path };
     }
 
     default:
@@ -248,7 +249,7 @@ async function readFile(
   }
 
   const content = await app.vault.cachedRead(file);
-  return { result: content, isError: false };
+  return { result: content, isError: false, path: file.path };
 }
 
 async function createFile(
@@ -268,7 +269,7 @@ async function createFile(
 
   await ensureParentFolder(app, path);
   await app.vault.create(path, content || "");
-  return { result: `Created ${path}.`, isError: false };
+  return { result: `Created ${path}.`, isError: false, path };
 }
 
 async function listFiles(
@@ -332,7 +333,7 @@ async function renameFile(
 
   // fileManager.renameFile() updates all internal links automatically
   await app.fileManager.renameFile(file, normalizedNew);
-  return { result: `Renamed ${path} to ${normalizedNew}.`, isError: false };
+  return { result: `Renamed ${path} to ${normalizedNew}.`, isError: false, path: normalizedNew };
 }
 
 async function deleteFile(
@@ -367,14 +368,14 @@ async function getProperties(
   const frontmatter = cache?.frontmatter;
 
   if (!frontmatter) {
-    return { result: `No frontmatter properties found in ${file.path}.`, isError: false };
+    return { result: `No frontmatter properties found in ${file.path}.`, isError: false, path: file.path };
   }
 
   // Remove the position metadata that Obsidian adds internally
   const clean = { ...frontmatter };
   delete clean.position;
 
-  return { result: JSON.stringify(clean, null, 2), isError: false };
+  return { result: JSON.stringify(clean, null, 2), isError: false, path: file.path };
 }
 
 async function setProperties(
@@ -408,7 +409,7 @@ async function setProperties(
   if (setKeys.length > 0) parts.push(`Set: ${setKeys.join(", ")}`);
   if (removedKeys.length > 0) parts.push(`Removed: ${removedKeys.join(", ")}`);
 
-  return { result: `Updated properties in ${file.path}. ${parts.join(". ")}.`, isError: false };
+  return { result: `Updated properties in ${file.path}. ${parts.join(". ")}.`, isError: false, path: file.path };
 }
 
 async function getBacklinks(
@@ -431,13 +432,14 @@ async function getBacklinks(
   }
 
   if (backlinks.length === 0) {
-    return { result: `No backlinks found for ${file.path}.`, isError: false };
+    return { result: `No backlinks found for ${file.path}.`, isError: false, path: file.path };
   }
 
   backlinks.sort();
   return {
     result: `${backlinks.length} note(s) link to ${file.path}:\n${backlinks.map((p) => `- ${p}`).join("\n")}`,
     isError: false,
+    path: file.path,
   };
 }
 
@@ -479,7 +481,7 @@ async function openDocument(
   // Open in the most recent non-chat leaf so it doesn't replace the sidebar
   const leaf = app.workspace.getLeaf(false);
   await leaf.openFile(file);
-  return { result: `Opened ${file.path}.`, isError: false };
+  return { result: `Opened ${file.path}.`, isError: false, path: file.path };
 }
 
 async function askUser(
