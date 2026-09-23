@@ -106,8 +106,9 @@ export interface ToolResult {
 
 export interface AgentCallbacks {
   onThinking: () => void;
-  onToolCall: (name: string, input: Record<string, unknown>) => void;
-  onToolResult: (name: string, result: ToolResult) => void;
+  /** `id` is the tool_use id, so a result can be matched to its own call. */
+  onToolCall: (id: string, name: string, input: Record<string, unknown>) => void;
+  onToolResult: (id: string, name: string, result: ToolResult) => void;
   onResponse: (text: string) => void;
   onAskUser: (question: string) => Promise<string>;
   onError: (error: string) => void;
@@ -121,8 +122,16 @@ export interface AgentCallbacks {
  * history lives separately in `AgentLoop`.
  */
 export interface ChatHistoryEntry {
+  /**
+   * "user" | "assistant" | "error" | "tool-call". A "tool-call" is recorded
+   * when the call starts and gets its `toolResult` when it returns, so a call
+   * still in flight replays as running. Older saves stored completed calls as
+   * "tool-result" entries instead; those still replay.
+   */
   type: string;
   text?: string;
+  /** The tool_use id, matching a result back to its call. */
+  toolId?: string;
   toolName?: string;
   toolInput?: Record<string, unknown>;
   toolResult?: ToolResult;
@@ -141,6 +150,20 @@ export interface ChatHistoryEntry {
 export interface OpenAIConversationState {
   previousResponseId: string | null;
 }
+
+/**
+ * Something that happened in a session, sent to the views showing it. The
+ * session's own state is updated first regardless of who is listening, which
+ * is what lets a run carry on while no view is showing it.
+ */
+export type SessionEvent =
+  | { kind: "message"; entry: ChatHistoryEntry }
+  | { kind: "tool-result"; toolId: string; toolName: string; result: ToolResult }
+  | { kind: "thinking"; on: boolean }
+  | { kind: "ask-user"; question: string }
+  | { kind: "running"; running: boolean }
+  | { kind: "title"; title: string }
+  | { kind: "cleared" };
 
 /** A session as persisted to disk. */
 export interface SessionSnapshot {
