@@ -1,4 +1,4 @@
-import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
+import { ItemView, WorkspaceLeaf, Notice, type ViewStateResult } from "obsidian";
 import { mount, unmount } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
@@ -12,10 +12,12 @@ export const VIEW_TYPE_CHAT = "ochat-view";
  * Chat view for Obsidian Chat.
  * Desktop: right sidebar. Mobile: right sidebar (slides in from edge).
  *
- * The view is a window onto a session owned by `plugin.sessions` and holds no
- * conversation state of its own. Turns are run by the store, so closing the
- * view or switching sessions doesn't interrupt one, and showing that session
- * again replays whatever happened in the meantime.
+ * Each pane shows one session, owned by `plugin.sessions`, and holds no
+ * conversation state of its own. Turns are run by the store, so closing a pane
+ * or pointing it at another session doesn't interrupt one, and showing that
+ * session again replays whatever happened in the meantime. The pane persists
+ * which session it shows through getState()/setState(), so tabs, splits and
+ * pop-out windows come back to the same conversation after a restart.
  */
 export class ObsidianChatView extends ItemView {
   private plugin: ChatPlugin;
@@ -25,10 +27,16 @@ export class ObsidianChatView extends ItemView {
   private unsubscribe: (() => void) | null = null;
   /** Maps a tool_use id to the row rendering it. */
   private toolRows = new Map<string, number>();
+  private readyResolve: (() => void) | null = null;
+  /** Resolves once the component is mounted and bound to a session. */
+  readonly whenReady: Promise<void>;
 
   constructor(leaf: WorkspaceLeaf, plugin: ChatPlugin) {
     super(leaf);
     this.plugin = plugin;
+    this.whenReady = new Promise<void>((resolve) => {
+      this.readyResolve = resolve;
+    });
   }
 
   getViewType(): string {
@@ -36,7 +44,26 @@ export class ObsidianChatView extends ItemView {
   }
 
   getDisplayText(): string {
-    return "Chat";
+    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+    return session?.title || "Chat";
+  }
+
+  /** Which session this pane shows. */
+  getSessionId(): string | null {
+    return this.sessionId;
+  }
+
+  getState(): Record<string, unknown> {
+    return { sessionId: this.sessionId };
+  }
+
+  async setState(state: unknown, result: ViewStateResult): Promise<void> {
+    const requested = (state as { sessionId?: unknown } | null)?.sessionId;
+    if (typeof requested === "string" && requested !== this.sessionId) {
+      if (this.chatContainer) this.bindTo(requested);
+      else this.sessionId = requested; // onOpen picks it up
+    }
+    await super.setState(state, result);
   }
 
   getIcon(): string {
@@ -44,6 +71,9 @@ export class ObsidianChatView extends ItemView {
   }
 
   async onOpen(): Promise<void> {
+    this.sessionId ??= this.plugin.takeRequestedSession(this.leaf);
+    const session = this.resolveSession();
+
     const container = this.contentEl;
     container.empty();
     container.addClass("ochat-view-container");
@@ -59,40 +89,57 @@ export class ObsidianChatView extends ItemView {
           this.handleUserMessage(text, selection),
         onClear: () => this.handleClear(),
         onStop: () => this.handleStop(),
-        onNewSession: () => this.plugin.newChat(),
-        onSelectSession: (id: string) => this.switchSession(id),
+        onNewSession: () => void this.plugin.newChat(this),
+        onSelectSession: (id: string) => void this.plugin.revealSession(id, this),
+        // Sessions change outside this pane too (created, discarded, deleted,
+        // renamed elsewhere), so refresh the list whenever it's opened.
+        onRefreshSessions: () => this.refreshSwitcher(),
       },
     });
 
-    this.renderActiveSession();
+    this.sessionId = null; // so bindTo() doesn't treat it as already bound
+    this.bindTo(session.id);
+    this.readyResolve?.();
+    this.readyResolve = null;
   }
 
   /**
-   * Show the active session: repaint its transcript, refresh the switcher, and
-   * listen for what it does next. Called on open and on every session change.
+   * The session to show when the pane opens: the one it was given, else one
+   * no other pane is showing (so two panes don't mirror one conversation),
+   * else a new one.
    */
-  renderActiveSession(): void {
-    const chat = this.chatContainer;
-    if (!chat) return;
+  private resolveSession(): ChatSession {
+    const given = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+    if (given) return given;
+    const taken = this.plugin.openSessionIds(this);
+    return this.plugin.sessions.list().find((s) => !taken.has(s.id)) ?? this.plugin.sessions.create();
+  }
 
-    const session = this.plugin.sessions.active();
+  /**
+   * Point this pane at a session: repaint its transcript and listen for what it
+   * does next. Allowed mid-turn, since the turn belongs to the session and keeps
+   * running while no pane shows it.
+   */
+  bindTo(sessionId: string): void {
+    const session = this.plugin.sessions.get(sessionId);
+    if (!session || !this.chatContainer) return;
     this.unsubscribe?.();
-    this.sessionId = session.id;
-    this.refreshSwitcher();
+    this.sessionId = sessionId;
     this.replay(session);
-    this.unsubscribe = this.plugin.sessions.subscribe(session.id, (event) =>
+    this.refreshSwitcher();
+    this.unsubscribe = this.plugin.sessions.subscribe(sessionId, (event) =>
       this.applyEvent(event)
     );
+    this.refreshHeader();
   }
 
   /**
-   * Switch which session the view shows. Allowed mid-turn: the turn belongs to
-   * its session, not to the view, and keeps running while switched away.
+   * Make the tab re-read getDisplayText(). `updateHeader()` exists at runtime
+   * but isn't in Obsidian's public typings, so it's called optionally: a stale
+   * tab title is cosmetic, and not worth crashing over if it ever goes away.
    */
-  private switchSession(id: string): void {
-    if (!this.plugin.sessions.setActive(id)) return;
-    this.renderActiveSession();
-    void this.plugin.saveChatHistory();
+  private refreshHeader(): void {
+    (this.leaf as WorkspaceLeaf & { updateHeader?: () => void }).updateHeader?.();
   }
 
   async onClose(): Promise<void> {
@@ -108,7 +155,8 @@ export class ObsidianChatView extends ItemView {
 
   /** Export the full transcript for debugging */
   getTranscript(): string {
-    return this.plugin.sessions.active().agent.exportTranscript();
+    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+    return session?.agent.exportTranscript() ?? "";
   }
 
   /** Programmatically send a message */
@@ -139,6 +187,8 @@ export class ObsidianChatView extends ItemView {
   // ─── Rendering ────────────────────────────────────────────────────────
 
   private refreshSwitcher(): void {
+    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+    this.chatContainer?.setTitle(session?.title ?? "Chat");
     this.chatContainer?.setSessions(
       this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.title })),
       this.sessionId ?? ""
@@ -227,6 +277,7 @@ export class ObsidianChatView extends ItemView {
         break;
       case "title":
         this.refreshSwitcher();
+        this.refreshHeader();
         break;
     }
   }
