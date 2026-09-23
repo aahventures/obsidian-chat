@@ -13,8 +13,14 @@ import type { ChatSettings, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
-import { SessionStore } from "./sessions";
+import { SessionStore, fromForkSessionsFile } from "./sessions";
 import { SessionSwitcherModal } from "./ui/session-switcher";
+
+const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
+/** Written by a fork of this plugin that had sessions first; imported once. */
+const FORK_STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-sessions.json";
+/** Bursts of changes, like every message in a turn, become one write. */
+const SAVE_DEBOUNCE_MS = 500;
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
@@ -26,12 +32,15 @@ export default class ChatPlugin extends Plugin {
   sessions!: SessionStore;
   /** Set once the final save at unload is done. */
   private unloading = false;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The save in progress. Saves run one at a time, since each re-reads the file. */
+  private saving: Promise<void> = Promise.resolve();
 
   async onload(): Promise<void> {
     await this.loadSettings();
 
     this.sessions = new SessionStore(this.app, this.settings);
-    this.sessions.onChange = () => void this.saveChatHistory();
+    this.sessions.onChange = () => this.requestSave();
     this.sessions.isOpen = (id) => this.isSessionOpen(id);
 
     // Restore persisted chat history
@@ -380,7 +389,7 @@ export default class ChatPlugin extends Plugin {
       // restart would bring the pane back on its previous session.
       this.app.workspace.requestSaveLayout();
       pane.focus();
-      void this.saveChatHistory();
+      this.requestSave();
       return pane;
     }
 
@@ -501,14 +510,34 @@ export default class ChatPlugin extends Plugin {
 
   // ─── Chat history persistence ─────────────────────────────────────────
 
-  async saveChatHistory(): Promise<void> {
+  /** Save soon, folding a burst of changes into one write. */
+  requestSave(): void {
     if (this.unloading) return;
+    if (this.saveTimer !== null) clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.saveChatHistory();
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  /** Save now, after any save already in progress. */
+  saveChatHistory(): Promise<void> {
+    if (this.saveTimer !== null) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (this.unloading) return this.saving;
+    this.saving = this.saving.then(() => this.writeChatHistory());
+    return this.saving;
+  }
+
+  private async writeChatHistory(): Promise<void> {
     try {
-      const state = this.sessions.toPersisted();
-      await this.app.vault.adapter.write(
-        ".obsidian/plugins/obsidian-chat/chat-state.json",
-        JSON.stringify(state)
-      );
+      // Re-read first: another device may have added or deleted sessions since
+      // this one loaded, and the store merges rather than overwrites.
+      const onDisk = await this.readJson(STATE_PATH);
+      const state = this.sessions.toPersisted(onDisk);
+      await this.app.vault.adapter.write(STATE_PATH, JSON.stringify(state));
     } catch {
       // Persistence is best-effort
     }
@@ -516,14 +545,31 @@ export default class ChatPlugin extends Plugin {
 
   private async loadChatHistory(): Promise<void> {
     try {
-      const raw = await this.app.vault.adapter.read(
-        ".obsidian/plugins/obsidian-chat/chat-state.json"
-      );
+      const state = await this.readJson(STATE_PATH);
+      // Coming from the fork that had sessions first: import its file, unless
+      // chat-state.json is already in the multi-session shape (then that's the
+      // newer one). Its file is left in place so going back loses nothing.
+      const multi = Array.isArray((state as { sessions?: unknown } | null)?.sessions);
+      if (!multi) {
+        const fork = fromForkSessionsFile(await this.readJson(FORK_STATE_PATH));
+        if (fork && fork.sessions.length > 0) {
+          this.sessions.restore(fork);
+          return;
+        }
+      }
       // Handles both the multi-session shape and the older single
       // conversation, which is migrated into one session.
-      this.sessions.restore(JSON.parse(raw));
+      this.sessions.restore(state);
     } catch {
-      // No saved state or parse error — start fresh
+      // Unreadable state: start fresh
+    }
+  }
+
+  private async readJson(path: string): Promise<unknown> {
+    try {
+      return JSON.parse(await this.app.vault.adapter.read(path));
+    } catch {
+      return null;
     }
   }
 
