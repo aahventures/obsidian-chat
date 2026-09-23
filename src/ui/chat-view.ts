@@ -2,7 +2,8 @@ import { ItemView, WorkspaceLeaf, Notice } from "obsidian";
 import { mount, unmount } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
-import type { ToolResult, SelectionScope } from "../types";
+import type { ChatSession } from "../sessions";
+import type { SelectionScope, SessionEvent } from "../types";
 import { getModelDisplayName } from "../settings";
 
 export const VIEW_TYPE_CHAT = "ochat-view";
@@ -10,18 +11,20 @@ export const VIEW_TYPE_CHAT = "ochat-view";
 /**
  * Chat view for Obsidian Chat.
  * Desktop: right sidebar. Mobile: right sidebar (slides in from edge).
- * Uses the plugin's shared AgentLoop and chatHistory so conversations
- * survive the view being closed and reopened (e.g. sidebar toggle).
+ *
+ * The view is a window onto a session owned by `plugin.sessions` and holds no
+ * conversation state of its own. Turns are run by the store, so closing the
+ * view or switching sessions doesn't interrupt one, and showing that session
+ * again replays whatever happened in the meantime.
  */
 export class ObsidianChatView extends ItemView {
   private plugin: ChatPlugin;
   private chatContainer: ReturnType<typeof ChatContainer> | undefined;
-  private running = false;
-  /**
-   * Bumped by each turn, Stop and Clear. A stopped turn's promise still settles
-   * later; only the current turn may unlock input when it does.
-   */
-  private turn = 0;
+  /** The session on screen. */
+  private sessionId: string | null = null;
+  private unsubscribe: (() => void) | null = null;
+  /** Maps a tool_use id to the row rendering it. */
+  private toolRows = new Map<string, number>();
 
   constructor(leaf: WorkspaceLeaf, plugin: ChatPlugin) {
     super(leaf);
@@ -65,66 +68,42 @@ export class ObsidianChatView extends ItemView {
   }
 
   /**
-   * Paint the active session's transcript and refresh the switcher. Called on
-   * open and on every session change, so the view always reflects exactly one
-   * session's history.
+   * Show the active session: repaint its transcript, refresh the switcher, and
+   * listen for what it does next. Called on open and on every session change.
    */
   renderActiveSession(): void {
     const chat = this.chatContainer;
     if (!chat) return;
 
-    const active = this.plugin.sessions.active();
-    chat.setSessions(
-      this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.title })),
-      active.id
+    const session = this.plugin.sessions.active();
+    this.unsubscribe?.();
+    this.sessionId = session.id;
+    this.refreshSwitcher();
+    this.replay(session);
+    this.unsubscribe = this.plugin.sessions.subscribe(session.id, (event) =>
+      this.applyEvent(event)
     );
-
-    chat.clearMessages();
-    for (const msg of active.chatHistory) {
-      switch (msg.type) {
-        case "user":
-          chat.addUserMessage(msg.text!);
-          break;
-        case "assistant":
-          chat.addAssistantMessage(msg.text!);
-          break;
-        case "tool-result":
-          if (msg.toolName && msg.toolResult) {
-            const id = chat.addToolCall(msg.toolName, msg.toolInput || {});
-            chat.updateToolResult(id, msg.toolName, msg.toolResult);
-          }
-          break;
-        case "error":
-          chat.addError(msg.text!);
-          break;
-      }
-    }
-
-    chat.setInputEnabled(true);
-    chat.focus();
   }
 
   /**
-   * Switch which session the view shows. Refuses mid-turn so a running
-   * agent's callbacks cannot write into the wrong transcript.
+   * Switch which session the view shows. Allowed mid-turn: the turn belongs to
+   * its session, not to the view, and keeps running while switched away.
    */
   private switchSession(id: string): void {
-    if (this.running) {
-      new Notice("Please wait for the current response to complete.");
-      this.renderActiveSession();
-      return;
-    }
     if (!this.plugin.sessions.setActive(id)) return;
     this.renderActiveSession();
     void this.plugin.saveChatHistory();
   }
 
   async onClose(): Promise<void> {
-    this.plugin.sessions.active().agent.abort();
+    // Deliberately doesn't stop the session: a turn outlives its view.
+    this.unsubscribe?.();
+    this.unsubscribe = null;
     if (this.chatContainer) {
       unmount(this.chatContainer);
       this.chatContainer = undefined;
     }
+    this.toolRows.clear();
   }
 
   /** Export the full transcript for debugging */
@@ -157,112 +136,119 @@ export class ObsidianChatView extends ItemView {
     this.handleClear();
   }
 
+  // ─── Rendering ────────────────────────────────────────────────────────
+
+  private refreshSwitcher(): void {
+    this.chatContainer?.setSessions(
+      this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.title })),
+      this.sessionId ?? ""
+    );
+  }
+
+  /** Rebuild the rendered conversation from the session's history. */
+  private replay(session: ChatSession): void {
+    const chat = this.chatContainer;
+    if (!chat) return;
+
+    chat.clearMessages();
+    // A half-typed draft belongs to the session it was typed in.
+    chat.clearInput();
+    this.toolRows.clear();
+
+    for (const entry of session.chatHistory) {
+      switch (entry.type) {
+        case "user":
+          chat.addUserMessage(entry.text ?? "");
+          break;
+        case "assistant":
+          chat.addAssistantMessage(entry.text ?? "");
+          break;
+        case "tool-call":
+        case "tool-result": {
+          if (!entry.toolName) break;
+          const row = chat.addToolCall(entry.toolName, entry.toolInput ?? {});
+          if (entry.toolId) this.toolRows.set(entry.toolId, row);
+          // A call with no result yet was still running when it was recorded.
+          if (entry.toolResult) chat.updateToolResult(row, entry.toolName, entry.toolResult);
+          break;
+        }
+        case "error":
+          chat.addError(entry.text ?? "");
+          break;
+      }
+    }
+
+    chat.setInputEnabled(!session.running);
+    if (session.running) chat.showThinking();
+    if (session.pendingQuestion) chat.promptAnswer();
+  }
+
+  /** Mirror a session event onto the component. */
+  private applyEvent(event: SessionEvent): void {
+    const chat = this.chatContainer;
+    if (!chat) return;
+
+    switch (event.kind) {
+      case "message": {
+        const entry = event.entry;
+        if (entry.type === "user") chat.addUserMessage(entry.text ?? "");
+        else if (entry.type === "assistant") chat.addAssistantMessage(entry.text ?? "");
+        else if (entry.type === "error") chat.addError(entry.text ?? "");
+        else if (entry.type === "tool-call" && entry.toolName) {
+          const row = chat.addToolCall(entry.toolName, entry.toolInput ?? {});
+          if (entry.toolId) this.toolRows.set(entry.toolId, row);
+        }
+        break;
+      }
+      case "tool-result": {
+        const row = this.toolRows.get(event.toolId);
+        if (row !== undefined) chat.updateToolResult(row, event.toolName, event.result);
+        break;
+      }
+      case "thinking":
+        if (event.on) chat.showThinking();
+        else chat.hideThinking();
+        break;
+      case "ask-user":
+        chat.promptAnswer();
+        break;
+      case "running":
+        if (event.running) {
+          chat.setInputEnabled(false);
+        } else {
+          chat.hideThinking();
+          chat.setInputEnabled(true);
+          chat.focus();
+        }
+        break;
+      case "cleared":
+        chat.clearMessages();
+        this.toolRows.clear();
+        break;
+      case "title":
+        this.refreshSwitcher();
+        break;
+    }
+  }
+
+  // ─── Input ────────────────────────────────────────────────────────────
+
   private async handleUserMessage(
     text: string,
     selection: SelectionScope | null
   ): Promise<void> {
-    if (this.running) {
+    if (!this.sessionId) return;
+    const outcome = await this.plugin.sessions.run(this.sessionId, text, selection);
+    if (outcome === "busy") {
       new Notice("Please wait for the current response to complete.");
-      return;
-    }
-
-    const chat = this.chatContainer!;
-    // Pin the session for the whole turn. The user can't switch mid-turn, but
-    // resolving it once keeps every callback below writing to one transcript.
-    const session = this.plugin.sessions.active();
-    const history = session.chatHistory;
-
-    this.running = true;
-    const turn = ++this.turn;
-    chat.addUserMessage(text);
-    history.push({ type: "user", text });
-    session.maybeTitleFrom(text);
-    session.touch();
-    chat.setSessions(
-      this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.title })),
-      session.id
-    );
-    chat.setInputEnabled(false);
-
-    const toolCallIds = new Map<string, number>();
-
-    try {
-      await session.agent.run(text, {
-        onThinking: () => {
-          chat.showThinking();
-        },
-        onToolCall: (name, input) => {
-          chat.hideThinking();
-          if (name === "ask_user") return;
-          const msgId = chat.addToolCall(name, input);
-          toolCallIds.set(`latest-${name}`, msgId);
-        },
-        onToolResult: (name, result: ToolResult) => {
-          if (name === "ask_user") return;
-          const msgId = toolCallIds.get(`latest-${name}`);
-          if (msgId !== undefined) {
-            chat.updateToolResult(msgId, name, result);
-          }
-          history.push({ type: "tool-result", toolName: name, toolInput: {}, toolResult: result });
-        },
-        onResponse: (text) => {
-          chat.hideThinking();
-          chat.addAssistantMessage(text);
-          history.push({ type: "assistant", text });
-        },
-        onAskUser: async (question) => {
-          chat.hideThinking();
-          chat.setInputEnabled(true);
-          const answer = await chat.showAskUser(question);
-          chat.setInputEnabled(false);
-          return answer;
-        },
-        onError: (error) => {
-          chat.hideThinking();
-          chat.addError(error);
-          history.push({ type: "error", text: error });
-        },
-      }, selection);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      chat.addError(`Unexpected error: ${msg}`);
-      history.push({ type: "error", text: `Unexpected error: ${msg}` });
-    } finally {
-      session.touch();
-      if (turn === this.turn) {
-        this.running = false;
-        chat.setInputEnabled(true);
-        chat.focus();
-      }
-      // Persist after each turn
-      this.plugin.saveChatHistory();
     }
   }
 
   private handleStop(): void {
-    this.plugin.sessions.active().agent.abort();
-    this.turn++;
-    this.running = false;
-    const chat = this.chatContainer;
-    if (chat) {
-      chat.hideThinking();
-      chat.setInputEnabled(true);
-      chat.focus();
-    }
-    this.plugin.saveChatHistory();
+    if (this.sessionId) this.plugin.sessions.abort(this.sessionId);
   }
 
   private handleClear(): void {
-    const session = this.plugin.sessions.active();
-    session.agent.abort();
-    session.agent.clear();
-    session.chatHistory = [];
-    session.touch();
-    this.chatContainer?.clearMessages();
-    this.turn++;
-    this.running = false;
-    this.chatContainer?.setInputEnabled(true);
-    // Clear persisted state
-    this.plugin.saveChatHistory();
+    if (this.sessionId) this.plugin.sessions.clearMessages(this.sessionId);
   }
 }
