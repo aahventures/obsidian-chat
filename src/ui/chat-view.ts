@@ -151,6 +151,8 @@ export class ObsidianChatView extends ItemView {
       this.chatContainer = undefined;
     }
     this.toolRows.clear();
+    // An untouched "New chat" that only this pane showed isn't worth keeping.
+    if (this.sessionId) this.plugin.discardIfAbandoned(this.sessionId, this);
   }
 
   /** Export the full transcript for debugging */

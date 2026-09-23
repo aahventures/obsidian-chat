@@ -24,6 +24,8 @@ export default class ChatPlugin extends Plugin {
    * history through a shared loop.
    */
   sessions!: SessionStore;
+  /** Set once the final save at unload is done. */
+  private unloading = false;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -89,6 +91,12 @@ export default class ChatPlugin extends Plugin {
       id: "clear-chat",
       name: "Clear conversation",
       callback: () => this.clearChat(),
+    });
+
+    this.addCommand({
+      id: "delete-chat",
+      name: "Delete this chat",
+      callback: () => this.deleteCurrentChat(),
     });
 
     this.addCommand({
@@ -164,6 +172,10 @@ export default class ChatPlugin extends Plugin {
     // The only place turns are stopped wholesale. Closing a view doesn't.
     this.sessions.abortAll();
     await this.saveChatHistory();
+    // Detaching runs every pane's onClose, which would discard the empty chats
+    // they show and save again, undoing the save above. A pane closing because
+    // the plugin is unloading isn't the user abandoning a chat.
+    this.unloading = true;
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
   }
 
@@ -255,6 +267,33 @@ export default class ChatPlugin extends Plugin {
     new SessionSwitcherModal(this).open();
   }
 
+  /**
+   * Drop a session a pane is leaving, if nothing was ever said in it and no
+   * other pane shows it. Anything with a message, a turn running, or a question
+   * waiting is left alone, so this only stops unused "New chat"s lingering in
+   * the switcher.
+   */
+  discardIfAbandoned(sessionId: string, leaving: ObsidianChatView): void {
+    if (this.unloading) return;
+    if (!this.sessions.get(sessionId)?.isEmpty) return;
+    if (this.openSessionIds(leaving).has(sessionId)) return;
+    this.sessions.delete(sessionId);
+  }
+
+  /** Delete the focused chat and close its pane. */
+  private deleteCurrentChat(): void {
+    const view = this.getTargetForDestructiveCommand();
+    const sessionId = view?.getSessionId();
+    if (!view || !sessionId) {
+      new Notice("Focus the chat you want to delete.");
+      return;
+    }
+    const title = this.sessions.get(sessionId)?.title ?? "chat";
+    this.sessions.delete(sessionId);
+    view.leaf.detach();
+    new Notice(`Deleted "${title}".`);
+  }
+
   // ─── Panes ────────────────────────────────────────────────────────────
 
   /**
@@ -333,8 +372,10 @@ export default class ChatPlugin extends Plugin {
     const pane =
       preferred && this.getChatViews().includes(preferred) ? preferred : this.getChatView();
     if (pane) {
+      const previous = pane.getSessionId();
       this.app.workspace.revealLeaf(pane.leaf);
       pane.bindTo(sessionId);
+      if (previous && previous !== sessionId) this.discardIfAbandoned(previous, pane);
       // getState() is what saves the binding, so ask for a layout save or a
       // restart would bring the pane back on its previous session.
       this.app.workspace.requestSaveLayout();
@@ -461,6 +502,7 @@ export default class ChatPlugin extends Plugin {
   // ─── Chat history persistence ─────────────────────────────────────────
 
   async saveChatHistory(): Promise<void> {
+    if (this.unloading) return;
     try {
       const state = this.sessions.toPersisted();
       await this.app.vault.adapter.write(
