@@ -22,7 +22,8 @@ User Input -> Agent Loop -> API Client (requestUrl) -> Claude/OpenAI
 
 ```
 src/
-  main.ts                # Plugin entry: commands, views, settings, context menus
+  main.ts                # Plugin entry: commands, panes, settings, context menus, persistence
+  sessions.ts            # SessionStore: every conversation, runs their turns, merge-on-save
   types.ts               # All interfaces and defaults
   settings.ts            # PluginSettingTab with model fetching
   api/
@@ -37,8 +38,11 @@ src/
     context.ts           # Builds vault context (active file, selection)
     system-prompt.ts     # Static system prompt (KV cache optimized)
   ui/
-    chat-view.ts         # ItemView wrapper, mounts Svelte component
+    chat-view.ts         # ItemView: one pane onto one session
     ChatContainer.svelte # All chat UI: messages, input, selection pill
+    session-switcher.ts  # "Switch chat" picker (SuggestModal), beside the header dropdown
+  util/
+    diff.ts              # Line diff for find_replace results
 ```
 
 ## Key Patterns
@@ -46,7 +50,12 @@ src/
 - **KV cache optimization**: System prompt is static (never includes dynamic context). Dynamic context (active file, selection) goes in the user message after the cached prefix.
 - **Anthropic `cache_control`**: Breakpoints on system prompt and last tool definition.
 - **Per-provider API keys**: Stored as `ochat-api-key-anthropic` / `ochat-api-key-openai` in `SecretStorage`.
-- **In-memory chat persistence**: `AgentLoop` and `chatHistory` live on the plugin instance, surviving view open/close cycles.
+- **Sessions**: `SessionStore` (on the plugin) owns every conversation and runs their turns. Each `ChatSession` has its own `AgentLoop` and OpenAI chain state, so conversations can't bleed into each other.
+- **Turns outlive panes**: callbacks write into the session first, then emit events to subscribed panes. `onClose()` doesn't abort; only plugin unload does. Showing a session again replays its history, including a tool call still running.
+- **One pane per session**: `ObsidianChatView` holds no conversation state. It saves `{ sessionId }` via `getState()`/`setState()`, so tabs, splits and pop-outs come back to the same chat. Lookups read a deferred leaf's saved state too, since an unloaded pane still owns its session.
+- **Switching chats**: sidebar tab bars show icons only, so the session title is in the chat's own header. With more than one session it becomes a dropdown that switches that pane. The "Switch chat" picker (command, its own ribbon icon, chat ribbon right-click) adds search, status and the last message. Obsidian's pane header isn't shown in the sidebar, so nothing goes there. "New chat" and switching point the pane you're in at the session rather than opening more panes; a session another pane shows is revealed there instead.
+- **Unused chats are discarded**: a pane leaving an untouched session drops it unless another pane shows it. Saves skip unused sessions no pane shows.
+- **Chat persistence**: `chat-state.json` in the plugin folder, which syncs between devices. Saves are debounced, serialized, re-read the file, keep sessions this device doesn't know, and carry deletes as tombstones. `chat-sessions.json` from the fork that had sessions first is imported once.
 - **Selection scope**: Injected into user message with scoping instructions. Model uses `find_replace` within selection text.
 
 ## Build
