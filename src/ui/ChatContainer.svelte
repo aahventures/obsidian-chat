@@ -52,9 +52,6 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // ask_user support
-  let askUserResolve: ((value: string) => void) | null = $state(null);
-
   // Sync model prop to local state (also updateable via setModel)
   $effect(() => {
     displayModel = model;
@@ -112,15 +109,16 @@
     messages.push({ id: nextId++, type: "error", text });
   }
 
-  export function showAskUser(question: string): Promise<string> {
-    addAssistantMessage(question);
+  /**
+   * Invite an answer to a pending ask_user question. The question is rendered
+   * as an ordinary assistant message by the session, and the answer goes back
+   * through `onSend` like any other input, so the component holds no resolver
+   * and a question can outlive the component being unmounted.
+   */
+  export function promptAnswer(): void {
     placeholder = "Type your answer...";
     inputEnabled = true;
     textareaEl?.focus();
-
-    return new Promise<string>((resolve) => {
-      askUserResolve = resolve;
-    });
   }
 
   export function setInputEnabled(enabled: boolean): void {
@@ -136,6 +134,15 @@
 
   export function focus(): void {
     textareaEl?.focus();
+  }
+
+  /**
+   * Drop whatever is half-typed. A draft belongs to the session it was typed
+   * in, so it mustn't follow the view to another one.
+   */
+  export function clearInput(): void {
+    inputText = "";
+    resetHeight();
   }
 
   /** Update the model display name in the header */
@@ -180,14 +187,6 @@
 
     inputText = "";
     resetHeight();
-
-    if (askUserResolve) {
-      addUserMessage(text);
-      const resolve = askUserResolve;
-      askUserResolve = null;
-      resolve(text);
-      return;
-    }
 
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;
