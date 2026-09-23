@@ -15,9 +15,9 @@ const MAX_HISTORY_PER_SESSION = 100;
 /** Cap on API messages kept per session when persisting. */
 const MAX_AGENT_MESSAGES_PER_SESSION = 80;
 /**
- * Cap on retained sessions. Sessions are never deleted from the UI, so
- * without a bound `chat-state.json` would grow forever. Least-recently-used
- * sessions are evicted first; the active session is never evicted.
+ * Cap on retained sessions, so `chat-state.json` can't grow forever.
+ * Least-recently-used sessions are evicted first; a session a pane is
+ * showing is never evicted.
  */
 const MAX_SESSIONS = 20;
 
@@ -108,8 +108,8 @@ export class ChatSession {
 }
 
 /**
- * Holds every open conversation and which one the view is showing, and runs
- * their turns.
+ * Holds every conversation and runs their turns. Which pane shows which
+ * session is the plugin's business, not the store's.
  *
  * Turns run here rather than in the view so that a run's lifetime isn't tied
  * to a view being open. Callbacks write into the session first and only then
@@ -122,10 +122,11 @@ export class ChatSession {
  */
 export class SessionStore {
   private sessions: ChatSession[] = [];
-  private activeId: string | null = null;
 
   /** Called whenever there is something worth saving. Set by the plugin. */
   onChange: () => void = () => {};
+  /** Whether some pane is showing a session. Set by the plugin. */
+  isOpen: (id: string) => boolean = () => false;
 
   constructor(
     private app: App,
@@ -326,49 +327,21 @@ export class SessionStore {
     return this.sessions.length;
   }
 
-  /** The active session, creating the first one on demand. */
-  active(): ChatSession {
-    const found = this.sessions.find((s) => s.id === this.activeId);
-    if (found) return found;
-    if (this.sessions.length > 0) {
-      const fallback = this.list()[0];
-      this.activeId = fallback.id;
-      return fallback;
-    }
-    return this.create();
-  }
-
   get(id: string): ChatSession | undefined {
     return this.sessions.find((s) => s.id === id);
   }
 
-  /** Start a new session and make it active. */
   create(): ChatSession {
     const session = new ChatSession(this.app, this.settings);
     this.sessions.push(session);
-    this.activeId = session.id;
     this.evict();
     return session;
   }
 
   /**
-   * Reuse the active session when it is still untouched rather than stacking
-   * up blank chats. "New chat" pressed twice in a row should not leave an
-   * empty session behind.
+   * Drop least-recently-used sessions past the cap. Never one a pane is
+   * showing, and never one with a turn in progress.
    */
-  createOrReuseEmpty(): ChatSession {
-    const current = this.sessions.find((s) => s.id === this.activeId);
-    if (current && current.isEmpty) return current;
-    return this.create();
-  }
-
-  setActive(id: string): ChatSession | undefined {
-    const session = this.get(id);
-    if (session) this.activeId = id;
-    return session;
-  }
-
-  /** Drop least-recently-used sessions past the cap, never the active one. */
   private evict(): void {
     if (this.sessions.length <= MAX_SESSIONS) return;
     const keep = new Set(
@@ -376,15 +349,19 @@ export class SessionStore {
         .slice(0, MAX_SESSIONS)
         .map((s) => s.id)
     );
-    if (this.activeId) keep.add(this.activeId);
-    this.sessions = this.sessions.filter((s) => keep.has(s.id));
+    this.sessions = this.sessions.filter(
+      (s) => keep.has(s.id) || s.running || this.isOpen(s.id)
+    );
   }
 
   toPersisted(): PersistedChatState {
+    const sessions = this.list();
     return {
       version: 2,
-      activeSessionId: this.activeId,
-      sessions: this.list().map((s) => s.toSnapshot()),
+      // Panes remember their own session now. This only tells an older version
+      // of the plugin which chat to show if someone downgrades.
+      activeSessionId: sessions[0]?.id ?? null,
+      sessions: sessions.map((s) => s.toSnapshot()),
     };
   }
 
@@ -395,7 +372,6 @@ export class SessionStore {
    */
   restore(raw: unknown): void {
     this.sessions = [];
-    this.activeId = null;
     if (!raw || typeof raw !== "object") return;
     const state = raw as Partial<PersistedChatState> & {
       chatHistory?: ChatHistoryEntry[];
@@ -406,9 +382,6 @@ export class SessionStore {
       for (const snap of state.sessions) {
         if (!snap || typeof snap.id !== "string") continue;
         this.sessions.push(ChatSession.fromSnapshot(this.app, this.settings, snap));
-      }
-      if (state.activeSessionId && this.get(state.activeSessionId)) {
-        this.activeId = state.activeSessionId;
       }
       this.evict();
       return;
@@ -424,7 +397,6 @@ export class SessionStore {
       const firstUser = session.chatHistory.find((m) => m.type === "user" && m.text);
       if (firstUser?.text) session.maybeTitleFrom(firstUser.text);
       this.sessions.push(session);
-      this.activeId = session.id;
     }
   }
 }
