@@ -173,4 +173,10 @@ export interface PersistedChatState {
   version: 2;
   activeSessionId: string | null;
   sessions: SessionSnapshot[];
+  /**
+   * Ids of deleted sessions. The file syncs between devices and each save
+   * keeps sessions it doesn't know about, so without these a session deleted
+   * on one device would be written back by another that still has it.
+   */
+  deleted?: string[];
 }
