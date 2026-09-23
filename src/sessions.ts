@@ -122,6 +122,13 @@ export class ChatSession {
  */
 export class SessionStore {
   private sessions: ChatSession[] = [];
+  /** Deleted here or on another device. Travels in the saved file. */
+  private deletedIds = new Set<string>();
+  /**
+   * Dropped by the cap on this device. Not tombstones, since another device
+   * may still want them, but a save mustn't write them straight back either.
+   */
+  private evictedIds = new Set<string>();
 
   /** Called whenever there is something worth saving. Set by the plugin. */
   onChange: () => void = () => {};
@@ -345,6 +352,7 @@ export class SessionStore {
     this.stop(session);
     session.listeners.clear();
     this.sessions = this.sessions.filter((s) => s !== session);
+    this.deletedIds.add(id);
     this.onChange();
   }
 
@@ -359,22 +367,46 @@ export class SessionStore {
         .slice(0, MAX_SESSIONS)
         .map((s) => s.id)
     );
-    this.sessions = this.sessions.filter(
-      (s) => keep.has(s.id) || s.running || this.isOpen(s.id)
-    );
+    const kept = this.sessions.filter((s) => keep.has(s.id) || s.running || this.isOpen(s.id));
+    for (const s of this.sessions) if (!kept.includes(s)) this.evictedIds.add(s.id);
+    this.sessions = kept;
   }
 
-  toPersisted(): PersistedChatState {
+  /**
+   * What to write to disk, merged with what's there now (`onDisk`).
+   *
+   * The file lives in the plugin folder, which syncs between devices. So keep
+   * any session another device wrote that this one doesn't hold, or saving here
+   * would delete it. Sessions this device holds are its to overwrite, so the
+   * same conversation edited on two devices at once is still last write wins.
+   * Deletes travel as tombstones, which are kept rather than expired: there's
+   * no knowing when the last device holding a copy has stopped, and they're
+   * only ids.
+   */
+  toPersisted(onDisk?: unknown): PersistedChatState {
+    const disk = asPersisted(onDisk);
+    for (const id of disk?.deleted ?? []) this.deletedIds.add(id);
+
     // An unused "New chat" isn't worth saving: every press of the command would
     // leave a permanent untitled entry in the switcher. One a pane is showing
     // is kept though, or that pane would lose its session across a restart.
-    const sessions = this.list().filter((s) => !s.isEmpty || this.isOpen(s.id));
+    const ours = this.list()
+      .filter((s) => !this.deletedIds.has(s.id))
+      .filter((s) => !s.isEmpty || this.isOpen(s.id))
+      .map((s) => s.toSnapshot());
+    const known = new Set([...this.sessions.map((s) => s.id), ...this.evictedIds]);
+    const theirs = (disk?.sessions ?? []).filter(
+      (s) => !known.has(s.id) && !this.deletedIds.has(s.id)
+    );
+    const sessions = [...ours, ...theirs].sort((a, b) => b.updatedAt - a.updatedAt);
+
     return {
       version: 2,
       // Panes remember their own session now. This only tells an older version
       // of the plugin which chat to show if someone downgrades.
       activeSessionId: sessions[0]?.id ?? null,
-      sessions: sessions.map((s) => s.toSnapshot()),
+      sessions,
+      deleted: [...this.deletedIds],
     };
   }
 
@@ -391,9 +423,13 @@ export class SessionStore {
       agentMessages?: SessionSnapshot["agentMessages"];
     };
 
+    for (const id of Array.isArray(state.deleted) ? state.deleted : []) {
+      if (typeof id === "string") this.deletedIds.add(id);
+    }
+
     if (Array.isArray(state.sessions)) {
       for (const snap of state.sessions) {
-        if (!snap || typeof snap.id !== "string") continue;
+        if (!snap || typeof snap.id !== "string" || this.deletedIds.has(snap.id)) continue;
         this.sessions.push(ChatSession.fromSnapshot(this.app, this.settings, snap));
       }
       this.evict();
@@ -417,4 +453,54 @@ export class SessionStore {
 function findLast<T>(items: T[], match: (item: T) => boolean): T | undefined {
   for (let i = items.length - 1; i >= 0; i--) if (match(items[i])) return items[i];
   return undefined;
+}
+
+/** The multi-session file shape, or null for anything else. */
+function asPersisted(raw: unknown): PersistedChatState | null {
+  const state = raw as Partial<PersistedChatState> | null;
+  if (!state || typeof state !== "object" || !Array.isArray(state.sessions)) return null;
+  return {
+    version: 2,
+    activeSessionId: null,
+    sessions: state.sessions.filter(
+      (s): s is SessionSnapshot => !!s && typeof s.id === "string"
+    ),
+    deleted: Array.isArray(state.deleted)
+      ? state.deleted.filter((id): id is string => typeof id === "string")
+      : [],
+  };
+}
+
+/**
+ * Convert `chat-sessions.json`, written by a fork of this plugin that had
+ * sessions first, into the `chat-state.json` shape. Its transcript entries
+ * already match ChatHistoryEntry. Returns null if it isn't that file.
+ */
+export function fromForkSessionsFile(raw: unknown): PersistedChatState | null {
+  const file = raw as { sessions?: unknown[]; deleted?: unknown[] } | null;
+  if (!file || !Array.isArray(file.sessions)) return null;
+  const sessions: SessionSnapshot[] = [];
+  for (const item of file.sessions) {
+    const s = item as Record<string, unknown> | null;
+    if (!s || typeof s.id !== "string" || !s.id) continue;
+    const now = Date.now();
+    sessions.push({
+      id: s.id,
+      title: typeof s.title === "string" && s.title ? s.title : UNTITLED,
+      createdAt: typeof s.createdAt === "number" ? s.createdAt : now,
+      updatedAt: typeof s.updatedAt === "number" ? s.updatedAt : now,
+      chatHistory: Array.isArray(s.uiMessages) ? (s.uiMessages as ChatHistoryEntry[]) : [],
+      agentMessages: Array.isArray(s.agentMessages)
+        ? (s.agentMessages as SessionSnapshot["agentMessages"])
+        : [],
+      // That fork never restored a chain id, so start unchained.
+      openai: { previousResponseId: null },
+    });
+  }
+  return {
+    version: 2,
+    activeSessionId: null,
+    sessions,
+    deleted: (file.deleted ?? []).filter((id): id is string => typeof id === "string"),
+  };
 }
