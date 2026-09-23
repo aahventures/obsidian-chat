@@ -338,6 +338,16 @@ export class SessionStore {
     return session;
   }
 
+  /** Remove a session for good, stopping its turn first. */
+  delete(id: string): void {
+    const session = this.get(id);
+    if (!session) return;
+    this.stop(session);
+    session.listeners.clear();
+    this.sessions = this.sessions.filter((s) => s !== session);
+    this.onChange();
+  }
+
   /**
    * Drop least-recently-used sessions past the cap. Never one a pane is
    * showing, and never one with a turn in progress.
@@ -355,7 +365,10 @@ export class SessionStore {
   }
 
   toPersisted(): PersistedChatState {
-    const sessions = this.list();
+    // An unused "New chat" isn't worth saving: every press of the command would
+    // leave a permanent untitled entry in the switcher. One a pane is showing
+    // is kept though, or that pane would lose its session across a restart.
+    const sessions = this.list().filter((s) => !s.isEmpty || this.isOpen(s.id));
     return {
       version: 2,
       // Panes remember their own session now. This only tells an older version
