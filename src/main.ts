@@ -27,6 +27,7 @@ export default class ChatPlugin extends Plugin {
     await this.loadSettings();
 
     this.sessions = new SessionStore(this.app, this.settings);
+    this.sessions.onChange = () => void this.saveChatHistory();
 
     // Restore persisted chat history
     await this.loadChatHistory();
@@ -143,7 +144,8 @@ export default class ChatPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
-    for (const session of this.sessions.list()) session.agent.abort();
+    // The only place turns are stopped wholesale. Closing a view doesn't.
+    this.sessions.abortAll();
     await this.saveChatHistory();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE_CHAT);
   }

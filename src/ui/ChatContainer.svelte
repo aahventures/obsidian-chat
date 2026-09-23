@@ -114,15 +114,16 @@
     messages.push({ id: nextId++, type: "error", text });
   }
 
-  export function showAskUser(question: string): Promise<string> {
-    addAssistantMessage(question);
+  /**
+   * Invite an answer to a pending ask_user question. The question is rendered
+   * as an ordinary assistant message by the session, and the answer goes back
+   * through `onSend` like any other input, so the component holds no resolver
+   * and a question can outlive the component being unmounted.
+   */
+  export function promptAnswer(): void {
     placeholder = "Type your answer...";
     inputEnabled = true;
     textareaEl?.focus();
-
-    return new Promise<string>((resolve) => {
-      askUserResolve = resolve;
-    });
   }
 
   /** Release a paused agent when its turn is aborted, without sending an answer. */
@@ -145,6 +146,15 @@
 
   export function focus(): void {
     textareaEl?.focus();
+  }
+
+  /**
+   * Drop whatever is half-typed. A draft belongs to the session it was typed
+   * in, so it mustn't follow the view to another one.
+   */
+  export function clearInput(): void {
+    inputText = "";
+    resetHeight();
   }
 
   /** Update the model display name in the header */
@@ -197,14 +207,6 @@
     resetHeight();
     // Restore keyboard-button focus on this explicit send, before the reply runs.
     textareaEl?.focus();
-
-    if (askUserResolve) {
-      addUserMessage(text);
-      const resolve = askUserResolve;
-      askUserResolve = null;
-      resolve(text);
-      return;
-    }
 
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;
