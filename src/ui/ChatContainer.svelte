@@ -23,6 +23,8 @@
     onStop: () => void;
     onNewSession: () => void;
     onSelectSession: (id: string) => void;
+    /** Asked for just before the dropdown opens, so its list is current. */
+    onRefreshSessions: () => void;
   }
 
   let {
@@ -35,9 +37,13 @@
     onStop,
     onNewSession,
     onSelectSession,
+    onRefreshSessions,
   }: Props = $props();
 
   let displayModel = $state("");
+  // The pane's session title. Sidebar tab bars show icons only, so this is
+  // what tells one chat pane from another.
+  let displayTitle = $state("Chat");
   // Session switcher state, pushed in from chat-view.ts via setSessions().
   let sessions = $state<Array<{ id: string; title: string }>>([]);
   let activeSessionId = $state("");
@@ -162,6 +168,10 @@
 
   export function setModel(name: string): void {
     displayModel = name;
+  }
+
+  export function setTitle(name: string): void {
+    displayTitle = name || "Chat";
   }
 
   /** Set the selection scope (shows pill in UI) */
@@ -352,13 +362,15 @@
           aria-label="Active chat"
           value={activeSessionId}
           onchange={handleSessionChange}
+          onpointerdown={onRefreshSessions}
+          onfocus={onRefreshSessions}
         >
           {#each sessions as s (s.id)}
             <option value={s.id}>{s.title}</option>
           {/each}
         </select>
       {:else}
-        <span class="ochat-header-title">Chat</span>
+        <span class="ochat-header-title" title={displayTitle}>{displayTitle}</span>
       {/if}
       <span class="ochat-header-model">{displayModel || "No model"}</span>
     </div>
@@ -531,6 +543,12 @@
     font-weight: var(--font-weight-bold, 600);
     font-size: var(--font-ui-medium);
     color: var(--text-normal);
+    /* Titles come from the first message, so they can be long. Ellipsize
+       rather than push the buttons off the edge. */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .ochat-header-model {
