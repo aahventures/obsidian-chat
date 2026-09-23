@@ -288,10 +288,15 @@ export class AgentLoop {
       // Execute tool calls and collect results
       const resultBlocks: ContentBlock[] = [];
 
-      for (const tc of toolCalls) {
+      for (let t = 0; t < toolCalls.length; t++) {
+        const tc = toolCalls[t];
         if (stopped()) return;
 
-        callbacks.onToolCall(tc.name!, tc.input!);
+        // Providers should always send an id. The fallback includes the run's
+        // generation so it can't collide with a call from an earlier turn.
+        const toolId = tc.id || `${tc.name}-${generation}-${i}-${t}`;
+
+        callbacks.onToolCall(toolId, tc.name!, tc.input!);
 
         const result = await executeTool(
           this.app,
@@ -301,7 +306,7 @@ export class AgentLoop {
         );
         if (stopped()) return;
 
-        callbacks.onToolResult(tc.name!, result);
+        callbacks.onToolResult(toolId, tc.name!, result);
 
         resultBlocks.push({
           type: "tool_result",
