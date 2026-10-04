@@ -14,6 +14,7 @@ import { DEFAULT_SETTINGS } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore } from "./sessions";
+import { SessionSwitcherModal } from "./ui/session-switcher";
 
 export default class ChatPlugin extends Plugin {
   settings: ChatSettings = DEFAULT_SETTINGS;
@@ -51,6 +52,9 @@ export default class ChatPlugin extends Plugin {
           item.setTitle("New chat").setIcon("plus").onClick(() => this.newChat())
         );
         menu.addItem((item) =>
+          item.setTitle("Switch chat").setIcon("list").onClick(() => this.openSessionSwitcher())
+        );
+        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
@@ -61,6 +65,11 @@ export default class ChatPlugin extends Plugin {
         this.openChat();
       }
     });
+
+    // Its own icon, so it can be shown or hidden on its own (Settings →
+    // Appearance → Ribbon menu). On mobile that makes the picker one tap from
+    // the drawer.
+    this.addRibbonIcon("list", "Switch chat", () => this.openSessionSwitcher());
 
     // ─── Commands ────────────────────────────────────────────────────────
 
@@ -86,6 +95,12 @@ export default class ChatPlugin extends Plugin {
       id: "new-chat",
       name: "New chat",
       callback: () => this.newChat(),
+    });
+
+    this.addCommand({
+      id: "switch-chat",
+      name: "Switch chat",
+      callback: () => this.openSessionSwitcher(),
     });
 
     // Editor command: chat about the current note (only when editor is active)
@@ -225,6 +240,19 @@ export default class ChatPlugin extends Plugin {
       return;
     }
     this.openChatWithMessage(`Tell me about ${file.path}`);
+  }
+
+  /**
+   * Show the session picker. The chosen chat goes into the chat pane in focus,
+   * else the first one open, else a new pane, unless another pane already
+   * shows it, in which case that pane is revealed.
+   */
+  openSessionSwitcher(): void {
+    if (this.sessions.list().length === 0) {
+      new Notice("No chats yet.");
+      return;
+    }
+    new SessionSwitcherModal(this).open();
   }
 
   // ─── Panes ────────────────────────────────────────────────────────────

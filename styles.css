@@ -13,3 +13,29 @@
 .workspace-leaf-content[data-type="ochat-view"] {
   min-width: 280px;
 }
+
+/* ─── Session switcher (SuggestModal rows) ───────────────────────────────── */
+
+.ochat-session-item-title {
+  display: flex;
+  align-items: baseline;
+  gap: var(--size-4-2);
+  font-weight: var(--font-medium);
+}
+
+.ochat-session-item-status {
+  flex-shrink: 0;
+  font-size: var(--font-ui-smaller);
+  font-weight: var(--font-normal);
+  color: var(--text-accent);
+}
+
+.ochat-session-item-meta {
+  margin-top: 2px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  /* Keep long previews to one line so rows stay uniform */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
