@@ -250,7 +250,7 @@ async function searchVault(
         if (!line.toLowerCase().includes(query)) return;
         total++;
         if (hits.length >= MAX_LINES_PER_NOTE) return;
-        const text = line.length > MAX_LINE_CHARS ? line.substring(0, MAX_LINE_CHARS) + "…" : line;
+        const text = line.length > MAX_LINE_CHARS ? `${line.substring(0, MAX_LINE_CHARS)}… [line cut, ${line.length} chars total]` : line;
         hits.push(`  ${i + 1}: ${text}`);
       });
       if (hits.length > 0 || pathMatch) {

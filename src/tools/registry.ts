@@ -61,7 +61,7 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   {
     name: "search_vault",
     description:
-      "Search for files in the vault by filename or content. Returns matching file paths. With searchContent, also returns every matching line in each note as `line number: exact text`.",
+      "Search for files in the vault by filename or content. Returns matching file paths. With searchContent, also returns every matching line in each note as `line number: exact text`. Lines are cut at 300 characters (marked), and at most 20 lines are shown per note.",
     inputSchema: {
       type: "object",
       properties: {
