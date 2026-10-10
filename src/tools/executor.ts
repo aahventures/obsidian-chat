@@ -100,6 +100,63 @@ async function ensureParentFolder(app: App, filePath: string): Promise<void> {
   }
 }
 
+/** Most characters a single read_document / read_file call returns (about 4K tokens). */
+const MAX_READ_CHARS = 16000;
+
+/**
+ * Apply `offset` (1-based start line) and `limit` (line count) to file text and
+ * cap the result at MAX_READ_CHARS. Text that fits and has no paging params
+ * comes back untouched. A cut ends with a marker line saying where to resume.
+ */
+function pageContent(
+  content: string,
+  input: Record<string, unknown>
+): { text: string } | { error: string } {
+  const { offset, limit } = input;
+  if (offset === undefined && limit === undefined && content.length <= MAX_READ_CHARS) {
+    return { text: content };
+  }
+  if (offset !== undefined && (!Number.isInteger(offset) || (offset as number) < 1)) {
+    return { error: "'offset' must be an integer of 1 or more (1-based line number)." };
+  }
+  if (limit !== undefined && (!Number.isInteger(limit) || (limit as number) < 1)) {
+    return { error: "'limit' must be an integer of 1 or more (number of lines)." };
+  }
+
+  const lines = content.split("\n");
+  const total = lines.length;
+  const start = (offset as number | undefined) ?? 1;
+  if (start > total) {
+    return { error: `'offset' ${start} is past the end of the file, which has ${total} lines.` };
+  }
+
+  const maxEnd = limit === undefined ? total : Math.min(total, start - 1 + (limit as number));
+  const out: string[] = [];
+  let chars = 0;
+  let end = start - 1;
+  while (end < maxEnd) {
+    const line = lines[end];
+    const next = chars + line.length + (out.length > 0 ? 1 : 0);
+    if (next > MAX_READ_CHARS) {
+      // A single line over the cap is cut rather than dropped.
+      if (out.length === 0) {
+        out.push(line.slice(0, MAX_READ_CHARS));
+        end++;
+      }
+      break;
+    }
+    out.push(line);
+    chars = next;
+    end++;
+  }
+
+  const text = out.join("\n");
+  if (end >= total) return { text };
+  return {
+    text: `${text}\n[Showing lines ${start}-${end} of ${total}. Call again with offset=${end + 1} to read more.]`,
+  };
+}
+
 function findFrontmatterEnd(content: string): number {
   if (!content.startsWith("---")) return -1;
   const secondDash = content.indexOf("---", 3);
@@ -120,7 +177,9 @@ async function readDocument(
 
   // cachedRead() is faster for display-only reads
   const content = await app.vault.cachedRead(file);
-  return { result: `# ${file.path}\n\n${content}`, isError: false, path: file.path };
+  const page = pageContent(content, input);
+  if ("error" in page) return { result: page.error, isError: true };
+  return { result: `# ${file.path}\n\n${page.text}`, isError: false, path: file.path };
 }
 
 async function editDocument(
@@ -272,7 +331,9 @@ async function readFile(
   }
 
   const content = await app.vault.cachedRead(file);
-  return { result: content, isError: false, path: file.path };
+  const page = pageContent(content, input);
+  if ("error" in page) return { result: page.error, isError: true };
+  return { result: page.text, isError: false, path: file.path };
 }
 
 async function createFile(

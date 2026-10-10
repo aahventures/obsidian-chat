@@ -9,13 +9,21 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   {
     name: "read_document",
     description:
-      "Read the content of a markdown document. If no path is given, reads the currently active document.",
+      "Read the content of a markdown document. If no path is given, reads the currently active document. Long documents are cut at about 16,000 characters; use offset and limit to read further.",
     inputSchema: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description: "Path to the document relative to vault root. Omit to read the active document.",
+        },
+        offset: {
+          type: "integer",
+          description: "1-based line number to start reading from. Defaults to 1.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of lines to read. Output is also capped at about 16,000 characters.",
         },
       },
       required: [],
@@ -79,13 +87,21 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
   },
   {
     name: "read_file",
-    description: "Read the full content of any file in the vault by its path.",
+    description: "Read the content of any file in the vault by its path. Long files are cut at about 16,000 characters; use offset and limit to read further.",
     inputSchema: {
       type: "object",
       properties: {
         path: {
           type: "string",
           description: "Path to the file relative to vault root.",
+        },
+        offset: {
+          type: "integer",
+          description: "1-based line number to start reading from. Defaults to 1.",
+        },
+        limit: {
+          type: "integer",
+          description: "Maximum number of lines to read. Output is also capped at about 16,000 characters.",
         },
       },
       required: ["path"],
