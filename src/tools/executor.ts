@@ -214,6 +214,10 @@ async function editDocument(
   }
 }
 
+/** Search output caps: matching lines shown per note, and characters shown per line. */
+const MAX_LINES_PER_NOTE = 20;
+const MAX_LINE_CHARS = 300;
+
 async function searchVault(
   app: App,
   input: Record<string, unknown>
@@ -228,7 +232,8 @@ async function searchVault(
   for (const file of files) {
     if (results.length >= limit) break;
 
-    if (file.path.toLowerCase().includes(query)) {
+    const pathMatch = file.path.toLowerCase().includes(query);
+    if (pathMatch && !searchContent) {
       results.push(`- ${file.path}`);
       continue;
     }
@@ -236,13 +241,18 @@ async function searchVault(
     if (searchContent) {
       // cachedRead() avoids redundant disk reads
       const content = await app.vault.cachedRead(file);
-      const lowerContent = content.toLowerCase();
-      const idx = lowerContent.indexOf(query);
-      if (idx !== -1) {
-        const start = Math.max(0, idx - 50);
-        const end = Math.min(content.length, idx + query.length + 50);
-        const snippet = content.substring(start, end).replace(/\n/g, " ");
-        results.push(`- ${file.path}: ...${snippet}...`);
+      const hits: string[] = [];
+      let total = 0;
+      content.split("\n").forEach((line, i) => {
+        if (!line.toLowerCase().includes(query)) return;
+        total++;
+        if (hits.length >= MAX_LINES_PER_NOTE) return;
+        const text = line.length > MAX_LINE_CHARS ? line.substring(0, MAX_LINE_CHARS) + "…" : line;
+        hits.push(`  ${i + 1}: ${text}`);
+      });
+      if (hits.length > 0 || pathMatch) {
+        if (total > hits.length) hits.push(`  …and ${total - hits.length} more matches in this note`);
+        results.push([`- ${file.path}`, ...hits].join("\n"));
       }
     }
   }
