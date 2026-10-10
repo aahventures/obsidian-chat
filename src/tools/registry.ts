@@ -45,6 +45,10 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
           type: "string",
           description: "The exact text to find (required for find_replace).",
         },
+        all: {
+          type: "boolean",
+          description: "For find_replace: replace every occurrence instead of only the first. Default: false.",
+        },
         position: {
           type: "string",
           enum: ["beginning", "end", "after_frontmatter"],

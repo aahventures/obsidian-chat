@@ -130,6 +130,7 @@ async function editDocument(
   const operation = input.operation as string;
   const content = input.content as string;
   const find = input.find as string | undefined;
+  const all = input.all === true;
   const position = input.position as string | undefined;
 
   const file = resolveFile(app, input.path as string | undefined);
@@ -148,36 +149,38 @@ async function editDocument(
       }
 
       // Use vault.process() for atomic read-modify-write
-      let resultMsg = "";
-      let found = false;
+      let count = 0;
 
       await app.vault.process(file, (data) => {
+        count = data.split(find).length - 1;
+        if (count === 0) return data; // Return unchanged
+        if (all) return data.split(find).join(content);
         const idx = data.indexOf(find);
-        if (idx === -1) {
-          found = false;
-          return data; // Return unchanged
-        }
-        found = true;
-        const secondIdx = data.indexOf(find, idx + 1);
-        if (secondIdx !== -1) {
-          resultMsg = "[Note: Multiple matches found, replacing first occurrence.]\n";
-        }
         return data.substring(0, idx) + content + data.substring(idx + find.length);
       });
 
-      if (!found) {
+      if (count === 0) {
         return {
           result: "Could not find the specified text. Make sure it matches exactly (including whitespace and line breaks).",
           isError: true,
         };
       }
 
+      const resultMsg = all
+        ? `Replaced ${count} occurrence${count === 1 ? "" : "s"} in ${file.path}.`
+        : `${count > 1 ? `[Note: ${count} matches found, replaced the first. Pass all: true to replace all ${count}.]\n` : ""}Successfully replaced text in ${file.path}.`;
+
       return {
-        result: `${resultMsg}Successfully replaced text in ${file.path}.`,
+        result: resultMsg,
         isError: false,
         path: file.path,
-        // Diff is just the changed snippets — never the whole file.
-        diff: { path: file.path, before: find, after: content },
+        // Diff is just the changed snippets — never the whole file. For `all`, one
+        // before/after pair per occurrence, so the diff shows every replacement.
+        diff: {
+          path: file.path,
+          before: all ? Array(count).fill(find).join("\n") : find,
+          after: all ? Array(count).fill(content).join("\n") : content,
+        },
       };
     }
 
