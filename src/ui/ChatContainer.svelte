@@ -6,7 +6,7 @@
 
   interface ChatMessage {
     id: number;
-    type: "user" | "assistant" | "tool-call" | "tool-result" | "error" | "thinking";
+    type: "user" | "assistant" | "tool-call" | "tool-result" | "error" | "notice" | "divider" | "thinking";
     text?: string;
     toolName?: string;
     toolInput?: Record<string, unknown>;
@@ -113,6 +113,16 @@
 
   export function addError(text: string): void {
     messages.push({ id: nextId++, type: "error", text });
+  }
+
+  /** A note for the user only; the model never sees it. */
+  export function addNotice(text: string): void {
+    messages.push({ id: nextId++, type: "notice", text });
+  }
+
+  /** Marks where the model's view of the conversation starts. */
+  export function addDivider(): void {
+    messages.push({ id: nextId++, type: "divider" });
   }
 
   /**
@@ -455,6 +465,14 @@
           <div class="ochat-msg-content">{msg.text}</div>
         </div>
 
+      {:else if msg.type === "notice"}
+        <div class="ochat-notice">{msg.text}</div>
+
+      {:else if msg.type === "divider"}
+        <div class="ochat-divider" title="Older messages are trimmed from what is sent to keep requests small.">
+          <span>⚠ The model can't see anything above this line</span>
+        </div>
+
       {:else if msg.type === "thinking"}
         <div class="ochat-thinking">
           <span class="ochat-dot"></span>
@@ -636,6 +654,31 @@
 
   .ochat-assistant-msg :global(p:last-child) {
     margin-bottom: 0;
+  }
+
+  .ochat-notice {
+    align-self: center;
+    color: var(--text-warning);
+    font-size: var(--font-ui-smaller);
+    text-align: center;
+    max-width: 90%;
+  }
+
+  .ochat-divider {
+    display: flex;
+    align-items: center;
+    gap: var(--size-4-2);
+    color: var(--text-warning);
+    font-size: var(--font-ui-smaller);
+    font-weight: var(--font-semibold);
+    white-space: nowrap;
+  }
+
+  .ochat-divider::before,
+  .ochat-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 2px solid var(--text-warning);
   }
 
   .ochat-error-msg {

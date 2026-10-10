@@ -207,7 +207,9 @@ export class ObsidianChatView extends ItemView {
     chat.clearInput();
     this.toolRows.clear();
 
-    for (const entry of session.chatHistory) {
+    const rememberedFrom = session.rememberedFrom;
+    for (const [i, entry] of session.chatHistory.entries()) {
+      if (i === rememberedFrom && i > 0) chat.addDivider();
       switch (entry.type) {
         case "user":
           chat.addUserMessage(entry.text ?? "");
@@ -226,6 +228,9 @@ export class ObsidianChatView extends ItemView {
         }
         case "error":
           chat.addError(entry.text ?? "");
+          break;
+        case "notice":
+          chat.addNotice(entry.text ?? "");
           break;
       }
     }
@@ -246,6 +251,7 @@ export class ObsidianChatView extends ItemView {
         if (entry.type === "user") chat.addUserMessage(entry.text ?? "");
         else if (entry.type === "assistant") chat.addAssistantMessage(entry.text ?? "");
         else if (entry.type === "error") chat.addError(entry.text ?? "");
+        else if (entry.type === "notice") chat.addNotice(entry.text ?? "");
         else if (entry.type === "tool-call" && entry.toolName) {
           const row = chat.addToolCall(entry.toolName, entry.toolInput ?? {});
           if (entry.toolId) this.toolRows.set(entry.toolId, row);
@@ -273,6 +279,12 @@ export class ObsidianChatView extends ItemView {
           chat.focus();
         }
         break;
+      case "trimmed": {
+        // Redraw so the line moves down to the oldest turn still sent.
+        const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+        if (session) this.replay(session);
+        break;
+      }
       case "cleared":
         chat.clearMessages();
         this.toolRows.clear();

@@ -38,7 +38,7 @@ function debugLog(app: App, label: string, data: unknown): void {
 }
 
 /** The user's own message, as opposed to a user message carrying tool results. */
-function isTurnStart(message: UnifiedMessage): boolean {
+export function isTurnStart(message: UnifiedMessage): boolean {
   return message.role === "user" && typeof message.content === "string";
 }
 
@@ -103,6 +103,15 @@ export class AgentLoop {
     this.generation++;
     this.messages = [];
     clearOpenAIState(this.openaiState);
+  }
+
+  /**
+   * Whether each request carries the local history. A chained OpenAI
+   * conversation sends only the new turn, and the server keeps the rest, so
+   * trimming the local copy doesn't change what the model sees.
+   */
+  get sendsFullHistory(): boolean {
+    return this.settings.provider !== "openai" || !this.openaiState.previousResponseId;
   }
 
   /** Export API messages for persistence */
@@ -221,7 +230,8 @@ export class AgentLoop {
     this.messages.push({ role: "user", content: fullMessage });
 
     // Prune if conversation is too long
-    this.pruneHistory();
+    const dropped = this.pruneHistory();
+    if (dropped > 0 && this.sendsFullHistory) callbacks.onTrim?.(dropped);
 
     // System prompt is static (cache-friendly). Built once, identical every call.
     const systemPrompt = buildSystemPrompt();
@@ -329,10 +339,14 @@ export class AgentLoop {
     );
   }
 
-  /** Drop oldest messages when conversation gets too long, keeping recent context */
-  private pruneHistory(): void {
-    if (this.messages.length > MAX_CONVERSATION_LENGTH) {
-      this.messages = trimToTurns(this.messages, KEEP_RECENT);
-    }
+  /**
+   * Drop oldest messages when conversation gets too long, keeping recent
+   * context. Returns how many user turns were dropped.
+   */
+  private pruneHistory(): number {
+    if (this.messages.length <= MAX_CONVERSATION_LENGTH) return 0;
+    const before = this.messages.filter(isTurnStart).length;
+    this.messages = trimToTurns(this.messages, KEEP_RECENT);
+    return before - this.messages.filter(isTurnStart).length;
   }
 }
