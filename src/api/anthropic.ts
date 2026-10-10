@@ -36,7 +36,7 @@ export async function sendAnthropicMessage(
         cache_control: { type: "ephemeral" },
       },
     ],
-    messages: messages.map(toAnthropicMessage),
+    messages: withConversationCacheBreakpoint(messages.map(toAnthropicMessage)),
   };
 
   // Enable thinking based on model generation:
@@ -119,7 +119,12 @@ export async function sendAnthropicMessage(
       .filter((b): b is ContentBlock => b !== null),
     stopReason: data.stop_reason === "end_turn" ? "end_turn" : data.stop_reason,
     usage: data.usage
-      ? { inputTokens: data.usage.input_tokens, outputTokens: data.usage.output_tokens }
+      ? {
+          inputTokens: data.usage.input_tokens,
+          outputTokens: data.usage.output_tokens,
+          cacheReadTokens: data.usage.cache_read_input_tokens ?? 0,
+          cacheWriteTokens: data.usage.cache_creation_input_tokens ?? 0,
+        }
       : undefined,
   };
 }
@@ -134,6 +139,36 @@ interface AnthropicContentBlock {
   name?: string;
   input?: Record<string, unknown>;
   search_results?: Array<{ title: string; url: string; snippet: string }>;
+}
+
+/**
+ * Put a cache breakpoint on the newest message, so each call reads the whole
+ * conversation so far from cache instead of resending it at full price. Without
+ * it only the system prompt and tools were cached, and every note a tool had
+ * read was resent in full on every later call. The breakpoint moves forward
+ * each call and the previous one stays a valid read point. With the system
+ * prompt and the last tool that's 3 of the 4 breakpoints a request may have.
+ * Below the model's minimum cacheable size it silently doesn't cache.
+ */
+function withConversationCacheBreakpoint(
+  apiMessages: Record<string, unknown>[]
+): Record<string, unknown>[] {
+  const last = apiMessages[apiMessages.length - 1];
+  if (!last) return apiMessages;
+  const marker = { cache_control: { type: "ephemeral" } };
+
+  let content: unknown;
+  if (typeof last.content === "string") {
+    if (!last.content) return apiMessages;
+    content = [{ type: "text", text: last.content, ...marker }];
+  } else if (Array.isArray(last.content) && last.content.length > 0) {
+    const blocks = [...(last.content as Record<string, unknown>[])];
+    blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], ...marker };
+    content = blocks;
+  } else {
+    return apiMessages;
+  }
+  return [...apiMessages.slice(0, -1), { ...last, content }];
 }
 
 function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {
