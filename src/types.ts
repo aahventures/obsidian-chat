@@ -112,6 +112,8 @@ export interface AgentCallbacks {
   onResponse: (text: string) => void;
   onAskUser: (question: string) => Promise<string>;
   onError: (error: string) => void;
+  /** History was trimmed before this turn's first call; `turns` user turns were dropped. */
+  onTrim?: (turns: number) => void;
 }
 
 // ─── Chat Sessions ──────────────────────────────────────────────────────────
@@ -123,10 +125,11 @@ export interface AgentCallbacks {
  */
 export interface ChatHistoryEntry {
   /**
-   * "user" | "assistant" | "error" | "tool-call". A "tool-call" is recorded
-   * when the call starts and gets its `toolResult` when it returns, so a call
-   * still in flight replays as running. Older saves stored completed calls as
-   * "tool-result" entries instead; those still replay.
+   * "user" | "assistant" | "error" | "tool-call" | "notice". A "tool-call" is
+   * recorded when the call starts and gets its `toolResult` when it returns, so
+   * a call still in flight replays as running. Older saves stored completed
+   * calls as "tool-result" entries instead; those still replay. A "notice" is
+   * shown to the user only and never sent to the model.
    */
   type: string;
   text?: string;
@@ -163,6 +166,7 @@ export type SessionEvent =
   | { kind: "ask-user"; question: string }
   | { kind: "running"; running: boolean }
   | { kind: "title"; title: string }
+  | { kind: "trimmed" }
   | { kind: "cleared" };
 
 /** A session as persisted to disk. */

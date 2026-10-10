@@ -8,7 +8,7 @@ import type {
   SessionSnapshot,
   PersistedChatState,
 } from "./types";
-import { AgentLoop, trimToTurns } from "./agent/loop";
+import { AgentLoop, isTurnStart, trimToTurns } from "./agent/loop";
 
 /** Cap on UI transcript entries kept per session when persisting. */
 const MAX_HISTORY_PER_SESSION = 100;
@@ -80,6 +80,37 @@ export class ChatSession {
 
   touch(): void {
     this.updatedAt = Date.now();
+  }
+
+  /**
+   * Index of the first transcript entry the model can still see, or 0 if it
+   * sees them all. Long chats drop their oldest turns from what is sent (see
+   * AgentLoop.pruneHistory) while the transcript keeps showing them, so this
+   * is where the view draws the line. Turns are matched newest first by the
+   * user's text, which each sent turn ends with after its context block.
+   * Answers to ask_user are tool results rather than turns, so they don't
+   * match and are passed over.
+   */
+  get rememberedFrom(): number {
+    if (!this.agent.sendsFullHistory) return 0;
+    const turns = this.agent
+      .exportMessages()
+      .filter(isTurnStart)
+      .map((m) => m.content as string);
+    let t = turns.length - 1;
+    let first = -1;
+    for (let i = this.chatHistory.length - 1; i >= 0 && t >= 0; i--) {
+      const entry = this.chatHistory[i];
+      if (entry.type !== "user" || !entry.text) continue;
+      if (turns[t].endsWith(`\n\n${entry.text}`)) {
+        first = i;
+        t--;
+      }
+    }
+    // Ran out of transcript first: its start was capped on save, so nothing
+    // on screen is missing from what is sent.
+    if (t >= 0 || first < 0) return 0;
+    return this.chatHistory.slice(0, first).some((e) => e.type === "user") ? first : 0;
   }
 
   toSnapshot(): SessionSnapshot {
@@ -279,6 +310,17 @@ export class SessionStore {
       onError: (error) => {
         this.emit(session, { kind: "thinking", on: false });
         this.append(session, { type: "error", text: error });
+      },
+
+      onTrim: (turns) => {
+        // Only the latest trim is worth a line; the divider tracks the rest.
+        session.chatHistory = session.chatHistory.filter((e) => e.type !== "notice");
+        const what = turns === 1 ? "message of yours is" : `messages of yours are`;
+        this.append(session, {
+          type: "notice",
+          text: `History trimmed: ${turns === 1 ? "an" : turns} earlier ${what} no longer sent to the model.`,
+        });
+        this.emit(session, { kind: "trimmed" });
       },
     };
   }
