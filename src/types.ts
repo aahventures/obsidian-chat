@@ -52,8 +52,13 @@ export interface UnifiedResponse {
   content: ContentBlock[];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop" | string;
   usage?: {
+    /** Uncached input only. Total input is this plus the two cache counts. */
     inputTokens: number;
     outputTokens: number;
+    /** Anthropic only: input served from cache (billed at about 0.1x). */
+    cacheReadTokens?: number;
+    /** Anthropic only: input written to cache (billed at about 1.25x). */
+    cacheWriteTokens?: number;
   };
 }
 
