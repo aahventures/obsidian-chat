@@ -549,7 +549,6 @@
       bind:this={textareaEl}
       bind:value={inputText}
       {placeholder}
-      aria-busy={!inputEnabled}
       rows="1"
       onkeydown={handleKeydown}
       oninput={autoGrow}
