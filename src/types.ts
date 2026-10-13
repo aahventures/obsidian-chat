@@ -9,6 +9,8 @@ export interface ChatSettings {
   maxIterations: number;
   enableWebSearch: boolean;
   baseUrl: string;
+  /** Typing [[ in the chat input suggests vault files and adds the closing ]]. */
+  fileLinkMenu: boolean;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -18,6 +20,7 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   maxIterations: 20,
   enableWebSearch: true,
   baseUrl: "",
+  fileLinkMenu: true,
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
