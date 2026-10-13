@@ -53,6 +53,8 @@
   let inputText = $state("");
   let inputEnabled = $state(true);
   let placeholder = $state("Ask anything...");
+  /** The input is answering an ask_user question, which can't carry a selection. */
+  let awaitingAnswer = $state(false);
   let messagesEl: HTMLElement | undefined = $state();
   let textareaEl: HTMLTextAreaElement | undefined = $state();
   let nextId = 0;
@@ -136,11 +138,13 @@
   export function promptAnswer(): void {
     placeholder = "Type your answer...";
     inputEnabled = true;
+    awaitingAnswer = true;
     textareaEl?.focus();
   }
 
   export function setInputEnabled(enabled: boolean): void {
     inputEnabled = enabled;
+    awaitingAnswer = false;
     placeholder = enabled ? "Ask anything..." : "Reply in progress...";
   }
 
@@ -212,6 +216,13 @@
 
     inputText = "";
     resetHeight();
+
+    // An answer is a tool result, not a turn, so it can't carry the selection:
+    // leave the pill up for the next message instead of consuming it.
+    if (awaitingAnswer) {
+      onSend(text, null);
+      return;
+    }
 
     // Pass current selection and consume it (one-shot per send)
     const currentSelection = selection;
@@ -509,9 +520,16 @@
 
   <!-- Selection pill -->
   {#if selection}
-    <div class="ochat-selection-pill">
+    <div class="ochat-selection-pill" class:ochat-selection-held={awaitingAnswer}>
       <div class="ochat-selection-content">
-        <span class="ochat-selection-label">Selection from {selection.filePath.split("/").pop()}</span>
+        <span class="ochat-selection-label">
+          {#if awaitingAnswer}
+            <svg class="ochat-selection-warn" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+            <span>Not sent with your answer · kept for your next message</span>
+          {:else}
+            Selection from {selection.filePath.split("/").pop()}
+          {/if}
+        </span>
         <span class="ochat-selection-preview">{selection.text.substring(0, 80)}{selection.text.length > 80 ? "..." : ""}</span>
       </div>
       <button
@@ -1047,6 +1065,23 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+  }
+
+  /* An answer can't carry the selection, so show it waiting rather than attached. */
+  .ochat-selection-held {
+    border-color: var(--text-warning);
+  }
+
+  .ochat-selection-held .ochat-selection-label {
+    display: flex;
+    align-items: flex-start;
+    gap: 4px;
+    color: var(--text-warning);
+  }
+
+  .ochat-selection-warn {
+    flex-shrink: 0;
+    margin-top: 2px;
   }
 
   .ochat-selection-label {
