@@ -28,6 +28,8 @@
     onSelectSession: (id: string) => void;
     /** Asked for just before the dropdown opens, so its list is current. */
     onRefreshSessions: () => void;
+    /** Whether typing [[ suggests files; read live so the setting applies at once. */
+    fileLinkMenuEnabled: () => boolean;
   }
 
   let {
@@ -41,6 +43,7 @@
     onNewSession,
     onSelectSession,
     onRefreshSessions,
+    fileLinkMenuEnabled,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -290,7 +293,10 @@
    * as in Obsidian: otherwise Enter inside a finished link would pick a file.
    */
   function updateMention(typing: boolean): void {
-    if (!textareaEl) return;
+    if (!textareaEl || !fileLinkMenuEnabled()) {
+      mention = null;
+      return;
+    }
     const before = textareaEl.value.slice(0, textareaEl.selectionStart);
     const m = /\[\[([^[\]\n]*)$/.exec(before);
     if (!m) {
@@ -346,7 +352,12 @@
     // Backspacing the [[ typed just before its auto-added ]] removes all four
     // brackets, so the ]] isn't left behind. Brackets typed by hand ([], [ ])
     // get a normal Backspace.
-    if (e.key === "Backspace" && textareaEl && textareaEl.selectionStart === textareaEl.selectionEnd) {
+    if (
+      e.key === "Backspace" &&
+      fileLinkMenuEnabled() &&
+      textareaEl &&
+      textareaEl.selectionStart === textareaEl.selectionEnd
+    ) {
       const caret = textareaEl.selectionStart;
       const value = textareaEl.value;
       if (value.slice(caret - 2, caret + 2) === "[[]]") {
@@ -360,7 +371,7 @@
       }
     }
 
-    if (menuOpen) {
+    if (menuOpen && fileLinkMenuEnabled()) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         const n = mentionResults.length;
@@ -388,6 +399,12 @@
   }
 
   function handleInput(e: Event): void {
+    // Off: [[ is plain text, and the vault is never scanned.
+    if (!fileLinkMenuEnabled()) {
+      mention = null;
+      autoGrow();
+      return;
+    }
     const ie = e as InputEvent;
     // Typing the second [ adds the closing ]], as Obsidian's editor does. Keyed
     // on the typed character, not the input type: some mobile keyboards report
