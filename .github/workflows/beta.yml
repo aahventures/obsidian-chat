@@ -3,10 +3,14 @@ name: Beta release
 # Every push to a branch publishes a BRAT-installable pre-release built from
 # it, and deleting the branch removes its pre-releases again.
 #
-# Version: the next patch after the latest stable tag, then the branch name
-# and a counter, e.g. 1.6.4-feat-selection-chip.3. A pre-release sorts below
-# the same version without a suffix, so the next stable release supersedes
-# every beta. The version is written into the released manifest.json only;
+# Version: the next patch after the latest stable tag, then a UTC build
+# timestamp, the branch name and a per-branch build number, e.g.
+# 1.6.4-20261013154501.feat-selection-chip.3.
+# The timestamp comes first because semver compares pre-release identifiers
+# left to right (numbers numerically, text alphabetically), so BRAT sees the
+# newest push as the latest whatever the branch is called. A pre-release sorts
+# below the same version without a suffix, so the next stable release
+# supersedes every beta. The version is written into the released manifest.json only;
 # nothing is committed, so beta branches never conflict over it.
 #
 # Pushes keep the newest KEEP betas per branch. The delete trigger only runs
@@ -21,8 +25,8 @@ permissions:
   contents: write
 
 concurrency:
-  # Push and delete events for one branch share a group, so the counter and
-  # the cleanup never race each other.
+  # Push and delete events for one branch share a group, so two pushes never
+  # publish in the same second and the cleanup never races a publish.
   group: beta-${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
   cancel-in-progress: false
 
@@ -66,9 +70,11 @@ jobs:
           IFS=. read -r major minor patch <<<"$base"
           next="$major.$minor.$((patch + 1))"
 
-          last=$(grep -E "^${next//./\\.}-${slug}\.[0-9]+$" <<<"$tags" \
+          # The counter is last so the build number is easy to read. It never
+          # affects ordering: the timestamp before it already differs.
+          last=$(grep -E "^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{14}\.${slug}\.[0-9]+$" <<<"$tags" \
             | sed -E 's/.*\.([0-9]+)$/\1/' | sort -n | tail -1 || true)
-          version="$next-$slug.$(( ${last:-0} + 1 ))"
+          version="$next-$(date -u +%Y%m%d%H%M%S).$slug.$(( ${last:-0} + 1 ))"
 
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -104,7 +110,7 @@ jobs:
           set -euo pipefail
           old=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate \
             --jq '.[].ref | sub("^refs/tags/"; "")' \
-            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-${SLUG}\.[0-9]+$" | sort -V | head -n "-$KEEP" || true)
+            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{14}\.${SLUG}\.[0-9]+$" | sort -V | head -n "-$KEEP" || true)
           for tag in $old; do
             echo "Deleting $tag"
             gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes \
@@ -130,7 +136,7 @@ jobs:
 
           tags=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate \
             --jq '.[].ref | sub("^refs/tags/"; "")' \
-            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-${slug}\.[0-9]+$" || true)
+            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-[0-9]{14}\.${slug}\.[0-9]+$" || true)
           for tag in $tags; do
             echo "Deleting $tag"
             gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes \
