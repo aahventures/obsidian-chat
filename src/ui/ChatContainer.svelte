@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { App, Component as ObsidianComponent } from "obsidian";
-  import { Keymap, MarkdownRenderer, Notice } from "obsidian";
+  import { tick } from "svelte";
+  import type { App, Component as ObsidianComponent, TFile } from "obsidian";
+  import { Keymap, MarkdownRenderer, Notice, prepareFuzzySearch } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
   import { lineDiff } from "../util/diff";
 
@@ -164,6 +165,9 @@
    */
   export function clearInput(): void {
     inputText = "";
+    // An open [[ menu is part of the draft too.
+    mention = null;
+    dismissedStart = -1;
     resetHeight();
   }
 
@@ -215,6 +219,8 @@
     if (!text) return;
 
     inputText = "";
+    mention = null;
+    dismissedStart = -1;
     resetHeight();
 
     // An answer is a tool result, not a turn, so it can't carry the selection:
@@ -230,14 +236,173 @@
     onSend(text, currentSelection);
   }
 
+  // ─── [[ file links ────────────────────────────────────────────────────
+  // Typing [[ adds the closing ]] and opens a menu of vault files, filtered by
+  // what's between the brackets (spaces included). Picking one completes the
+  // link in the text, so it reads in the sentence and the model sees the note.
+
+  const MENTION_LIMIT = 8;
+
+  /** The [[query being typed at the caret, or null. `start` is the index of the [[. */
+  let mention = $state<{ start: number; query: string } | null>(null);
+  let mentionIndex = $state(0);
+  /** A [[ escaped out of: stays plain text until the caret leaves it. */
+  let dismissedStart = -1;
+  let menuEl: HTMLElement | undefined = $state();
+
+  const mentionResults = $derived(mention ? searchFiles(mention.query) : []);
+  const menuOpen = $derived(mentionResults.length > 0);
+
+  /**
+   * Keep the highlighted row visible. Only the arrow keys call this: scrolling
+   * on hover would move the list under the pointer and fire more hovers.
+   */
+  function scrollSelectedIntoView(): void {
+    void tick().then(() => {
+      menuEl?.querySelector(".ochat-mention-selected")?.scrollIntoView({ block: "nearest" });
+    });
+  }
+
+  function searchFiles(query: string): TFile[] {
+    const files = app.vault.getFiles();
+    // No query yet: what you touched last is the likeliest target.
+    if (!query) {
+      return [...files].sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
+    }
+    // Same matcher as the Quick Switcher, run over the full path so
+    // "src/agent/" narrows by folder too and spaces match separate words.
+    const match = prepareFuzzySearch(query);
+    const scored: { file: TFile; score: number }[] = [];
+    for (const file of files) {
+      const result = match(file.path);
+      if (result) scored.push({ file, score: result.score });
+    }
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, MENTION_LIMIT)
+      .map((s) => s.file);
+  }
+
+  /**
+   * Look for an unclosed [[ before the caret and open, update or close the menu.
+   * Only typing opens it. Moving the caret (arrows, a click) can close or refine
+   * a menu that's already open, but never opens one or hops it to another link,
+   * as in Obsidian: otherwise Enter inside a finished link would pick a file.
+   */
+  function updateMention(typing: boolean): void {
+    if (!textareaEl) return;
+    const before = textareaEl.value.slice(0, textareaEl.selectionStart);
+    const m = /\[\[([^[\]\n]*)$/.exec(before);
+    if (!m) {
+      mention = null;
+      dismissedStart = -1;
+      return;
+    }
+    const start = m.index;
+    if (!typing && mention?.start !== start) {
+      mention = null;
+      return;
+    }
+    if (start === dismissedStart) {
+      mention = null;
+      return;
+    }
+    if (mention?.start === start && mention.query === m[1]) return;
+    mentionIndex = 0;
+    if (menuEl) menuEl.scrollTop = 0;
+    mention = { start, query: m[1] };
+  }
+
+  /** Complete the link: [[query]] becomes [[Note name]], caret after it. */
+  function confirmMention(file: TFile | undefined): void {
+    // The list can shrink under the highlighted row (a file deleted mid-typing).
+    if (!file || !mention || !textareaEl) return;
+    const { start, query } = mention;
+    const head = inputText.slice(0, start);
+    // Replace the whole [[...]] when it's closed, even with the caret mid-query
+    // (the query is only the text before the caret). The closing ]] was added
+    // when [[ was typed, so this also keeps it from doubling.
+    const closed = /^[^[\]\n]*\]\]/.exec(inputText.slice(start + 2));
+    const linkEnd = closed ? start + 2 + closed[0].length : start + 2 + query.length;
+    const tail = inputText.slice(linkEnd);
+    // Obsidian's own link text: just the name, with the folder only when two
+    // files share it. The tools that read, edit or open a note resolve it.
+    const link = `[[${app.metadataCache.fileToLinktext(file, "")}]]`;
+    inputText = head + link + tail;
+    mention = null;
+    const end = head.length + link.length;
+    void tick().then(() => {
+      textareaEl?.focus();
+      textareaEl?.setSelectionRange(end, end);
+      autoGrow();
+    });
+  }
+
   function handleKeydown(e: KeyboardEvent): void {
     // Enter confirms an IME candidate (CJK input); it must not send. keyCode
     // 229 covers browsers that fire keydown after compositionend.
     if (e.isComposing || e.keyCode === 229) return;
+
+    // Backspacing the [[ typed just before its auto-added ]] removes all four
+    // brackets, so the ]] isn't left behind. Brackets typed by hand ([], [ ])
+    // get a normal Backspace.
+    if (e.key === "Backspace" && textareaEl && textareaEl.selectionStart === textareaEl.selectionEnd) {
+      const caret = textareaEl.selectionStart;
+      const value = textareaEl.value;
+      if (value.slice(caret - 2, caret + 2) === "[[]]") {
+        e.preventDefault();
+        inputText = value.slice(0, caret - 2) + value.slice(caret + 2);
+        void tick().then(() => {
+          textareaEl?.setSelectionRange(caret - 2, caret - 2);
+          updateMention(false);
+        });
+        return;
+      }
+    }
+
+    if (menuOpen) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const n = mentionResults.length;
+        mentionIndex = (mentionIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        scrollSelectedIntoView();
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        confirmMention(mentionResults[mentionIndex]);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        dismissedStart = mention?.start ?? -1;
+        mention = null;
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSend();
     }
+  }
+
+  function handleInput(e: Event): void {
+    const ie = e as InputEvent;
+    // Typing the second [ adds the closing ]], as Obsidian's editor does. Keyed
+    // on the typed character, not the input type: some mobile keyboards report
+    // punctuation as composition input.
+    if (textareaEl && ie.data === "[") {
+      const caret = textareaEl.selectionStart;
+      const value = textareaEl.value;
+      if (value.slice(caret - 2, caret) === "[[" && !value.slice(caret).startsWith("]]")) {
+        inputText = value.slice(0, caret) + "]]" + value.slice(caret);
+        // Setting the value moves the caret to the end; put it between the brackets.
+        void tick().then(() => textareaEl?.setSelectionRange(caret, caret));
+      }
+    }
+    autoGrow();
+    updateMention(true);
   }
 
   /**
@@ -433,7 +598,12 @@
           </details>
         {/if}
         <div class="ochat-msg ochat-user-msg">
-          <div class="ochat-msg-content">{msg.text}</div>
+          {#if msg.text?.includes("[[")}
+            <!-- Rendered so [[file links]] are clickable; other messages stay plain text -->
+            <div class="ochat-msg-content" use:markdown={msg.text}></div>
+          {:else}
+            <div class="ochat-msg-content">{msg.text}</div>
+          {/if}
         </div>
 
       {:else if msg.type === "assistant"}
@@ -545,6 +715,24 @@
     </div>
   {/if}
 
+  <!-- [[ file menu -->
+  {#if menuOpen}
+    <div class="ochat-mention-menu" bind:this={menuEl}>
+      {#each mentionResults as file, i (file.path)}
+        <button
+          class="ochat-mention-item"
+          class:ochat-mention-selected={i === mentionIndex}
+          onmousedown={keepFocus}
+          onmousemove={() => (mentionIndex = i)}
+          onclick={() => confirmMention(file)}
+        >
+          <span class="ochat-mention-name">{file.name}</span>
+          <span class="ochat-mention-path">{file.parent?.path === "/" ? "" : file.parent?.path}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
   <!-- Input bar -->
   <div class="ochat-input-bar">
     <textarea
@@ -554,7 +742,10 @@
       {placeholder}
       rows="1"
       onkeydown={handleKeydown}
-      oninput={autoGrow}
+      oninput={handleInput}
+      onkeyup={() => updateMention(false)}
+      onclick={() => updateMention(false)}
+      onblur={() => (mention = null)}
     ></textarea>
     {#if inputEnabled}
       <button
@@ -1118,6 +1309,74 @@
   .ochat-selection-dismiss:hover {
     background: var(--background-modifier-border);
     color: var(--text-normal);
+  }
+
+  /* A rendered user message wraps its text in <p>; trim the ends like the assistant's. */
+  .ochat-user-msg :global(p:first-child) {
+    margin-top: 0;
+  }
+
+  .ochat-user-msg :global(p:last-child) {
+    margin-bottom: 0;
+  }
+
+  /* Links in your own bubble. The theme colours links through these variables, so
+     set them rather than fight the rule: the theme's link colour is lost on the
+     accent background. Hover dims the text colour so it still changes. */
+  .ochat-user-msg {
+    --link-color: var(--text-on-accent);
+    --link-color-hover: color-mix(in srgb, var(--text-on-accent) 70%, transparent);
+  }
+
+  .ochat-user-msg :global(a) {
+    text-decoration: underline;
+  }
+
+  /* ─── [[ file menu ────────────────────────────────────────────────────── */
+  .ochat-mention-menu {
+    display: flex;
+    flex-direction: column;
+    max-height: 220px;
+    overflow-y: auto;
+    margin: 8px 8px 0;
+    background: var(--background-secondary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: var(--radius-m);
+    flex-shrink: 0;
+  }
+
+  .ochat-mention-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    text-align: left;
+    height: auto;
+    cursor: pointer;
+  }
+
+  .ochat-mention-selected {
+    background: var(--background-modifier-hover);
+  }
+
+  .ochat-mention-name {
+    flex-shrink: 0;
+    color: var(--text-normal);
+  }
+
+  .ochat-mention-path {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: var(--font-ui-smaller);
+    color: var(--text-faint);
   }
 
   /* ─── Responsive ────────────────────────────────────────────────────── */
