@@ -4,6 +4,30 @@ import { TOOL_DEFINITIONS } from "./registry";
 
 type AskUserCallback = (question: string) => Promise<string>;
 
+/**
+ * Remembers each file's mtime and size at the moment the model last read it, so
+ * a repeat read of an untouched file can skip resending the whole text. Any
+ * write (ours, the user's, sync) moves mtime, so the next read is a full one.
+ * One tracker per conversation, cleared whenever the history it describes is
+ * dropped: "unchanged" is only true while the earlier read is still in context.
+ */
+export class ReadTracker {
+  private seen = new Map<string, { mtime: number; size: number }>();
+
+  isUnchanged(file: TFile): boolean {
+    const prev = this.seen.get(file.path);
+    return !!prev && prev.mtime === file.stat.mtime && prev.size === file.stat.size;
+  }
+
+  record(file: TFile): void {
+    this.seen.set(file.path, { mtime: file.stat.mtime, size: file.stat.size });
+  }
+
+  clear(): void {
+    this.seen.clear();
+  }
+}
+
 /** Each tool's `required` params, read once from its schema. */
 const REQUIRED_PARAMS = new Map(
   TOOL_DEFINITIONS.map((t) => [t.name, (t.inputSchema.required as string[] | undefined) ?? []])
@@ -34,7 +58,8 @@ export async function executeTool(
   app: App,
   toolName: string,
   input: Record<string, unknown>,
-  onAskUser: AskUserCallback
+  onAskUser: AskUserCallback,
+  reads: ReadTracker = new ReadTracker()
 ): Promise<ToolResult> {
   try {
     const missing = missingRequiredParams(toolName, input);
@@ -46,7 +71,7 @@ export async function executeTool(
 
     switch (toolName) {
       case "read_document":
-        return await readDocument(app, input);
+        return await readDocument(app, input, reads);
       case "edit_document":
         return await editDocument(app, input);
       case "search_vault":
@@ -111,15 +136,25 @@ function findFrontmatterEnd(content: string): number {
 
 async function readDocument(
   app: App,
-  input: Record<string, unknown>
+  input: Record<string, unknown>,
+  reads: ReadTracker
 ): Promise<ToolResult> {
   const file = resolveFile(app, input.path as string | undefined);
   if (!file) {
     return { result: input.path ? `File not found: ${input.path}` : "No active document open.", isError: true };
   }
 
+  if (reads.isUnchanged(file)) {
+    return {
+      result: `# ${file.path}\n\n[Unchanged since you last read it in this conversation. Use that earlier copy.]`,
+      isError: false,
+      path: file.path,
+    };
+  }
+
   // cachedRead() is faster for display-only reads
   const content = await app.vault.cachedRead(file);
+  reads.record(file);
   return { result: `# ${file.path}\n\n${content}`, isError: false, path: file.path };
 }
 

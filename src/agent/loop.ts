@@ -10,7 +10,7 @@ import type {
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
 import { TOOL_DEFINITIONS } from "../tools/registry";
-import { executeTool } from "../tools/executor";
+import { executeTool, ReadTracker } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
 
@@ -87,6 +87,8 @@ export class AgentLoop {
    * OpenAIConversationState.
    */
   private openaiState: OpenAIConversationState = { previousResponseId: null };
+  /** Files the model has read and not seen change since. See ReadTracker. */
+  private reads = new ReadTracker();
 
   constructor(app: App, settings: ChatSettings) {
     this.app = app;
@@ -102,6 +104,7 @@ export class AgentLoop {
   clear(): void {
     this.generation++;
     this.messages = [];
+    this.reads.clear();
     clearOpenAIState(this.openaiState);
   }
 
@@ -124,6 +127,7 @@ export class AgentLoop {
     // Earlier versions saved with a plain tail slice, so a stored history can
     // start mid-turn. Repair that here rather than fail on the next send.
     this.messages = trimToTurns(messages);
+    this.reads.clear();
   }
 
   /** Export the provider chaining state for persistence */
@@ -315,7 +319,8 @@ export class AgentLoop {
           this.app,
           tc.name!,
           tc.input!,
-          callbacks.onAskUser
+          callbacks.onAskUser,
+          this.reads
         );
         if (stopped()) return;
 
@@ -347,6 +352,8 @@ export class AgentLoop {
     if (this.messages.length <= MAX_CONVERSATION_LENGTH) return 0;
     const before = this.messages.filter(isTurnStart).length;
     this.messages = trimToTurns(this.messages, KEEP_RECENT);
+    // The reads we vouch for may have just left the history.
+    this.reads.clear();
     return before - this.messages.filter(isTurnStart).length;
   }
 }
