@@ -84,10 +84,40 @@ export async function executeTool(
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
+/**
+ * Find a file by exact path, else by Obsidian link text. The user's `[[Note]]`
+ * links name a file the short way (the folder only when two share a name), so
+ * the same text has to work here as a path. Rename and delete stay exact-path:
+ * a bare name can match several files, and guessing wrong there does damage.
+ */
+function findFile(app: App, path: string): TFile | null {
+  const exact = app.vault.getFileByPath(normalizePath(path));
+  if (exact) return exact;
+
+  // Link text can carry a heading or alias: [[Note#Heading]], [[Note|alias]].
+  const linkpath = path.split("|")[0].split("#")[0].trim();
+  if (!linkpath) return null;
+  const file = app.metadataCache.getFirstLinkpathDest(linkpath, "");
+  if (!file) return null;
+
+  // The resolver quietly picks one of several same-named notes. A miss is
+  // better than an edit landing in the wrong note, so only a name that matches
+  // exactly one file resolves.
+  const lower = linkpath.toLowerCase();
+  // The text is this file's whole path (less .md), so nothing else can claim it.
+  const own = file.path.toLowerCase();
+  if (own === lower || own === lower + ".md") return file;
+  const matches = app.vault.getFiles().filter((f) => {
+    const p = f.path.toLowerCase();
+    return [p, p.replace(/\.md$/, "")].some((c) => c === lower || c.endsWith("/" + lower));
+  });
+  return matches.length > 1 ? null : file;
+}
+
 /** Resolve a file from path or active file */
 function resolveFile(app: App, path?: string): TFile | null {
   if (path) {
-    return app.vault.getFileByPath(normalizePath(path));
+    return findFile(app, path);
   }
   return app.workspace.getActiveFile();
 }
@@ -266,7 +296,7 @@ async function readFile(
     return { result: "'path' parameter is required.", isError: true };
   }
 
-  const file = app.vault.getFileByPath(normalizePath(path));
+  const file = findFile(app, path);
   if (!file) {
     return { result: `File not found: ${path}`, isError: true };
   }
@@ -501,7 +531,7 @@ async function openDocument(
     return { result: "'path' parameter is required.", isError: true };
   }
 
-  const file = app.vault.getFileByPath(normalizePath(path));
+  const file = findFile(app, path);
   if (!file) {
     return { result: `File not found: ${path}`, isError: true };
   }
