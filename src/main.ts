@@ -15,6 +15,7 @@ import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore, fromForkSessionsFile } from "./sessions";
 import { SessionSwitcherModal } from "./ui/session-switcher";
+import { runLayoutDiagnostics } from "./ui/layout-diagnostics";
 
 const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
 /** Written by a fork of this plugin that had sessions first; imported once. */
@@ -118,6 +119,12 @@ export default class ChatPlugin extends Plugin {
       id: "switch-chat",
       name: "Switch chat",
       callback: () => this.openSessionSwitcher(),
+    });
+
+    this.addCommand({
+      id: "layout-diagnostics",
+      name: "Chat layout diagnostics",
+      callback: () => runLayoutDiagnostics(this.app),
     });
 
     // Editor command: chat about the current note (only when editor is active)
