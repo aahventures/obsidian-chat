@@ -1,0 +1,138 @@
+name: Beta release
+
+# Every push to a branch publishes a BRAT-installable pre-release built from
+# it, and deleting the branch removes its pre-releases again.
+#
+# Version: the next patch after the latest stable tag, then the branch name
+# and a counter, e.g. 1.6.4-feat-selection-chip.3. A pre-release sorts below
+# the same version without a suffix, so the next stable release supersedes
+# every beta. The version is written into the released manifest.json only;
+# nothing is committed, so beta branches never conflict over it.
+#
+# Pushes keep the newest KEEP betas per branch. The delete trigger only runs
+# from the default branch, so branch cleanup starts once this file is on main.
+
+on:
+  push:
+    branches-ignore: [main, 'release/**']
+  delete:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Push and delete events for one branch share a group, so the counter and
+  # the cleanup never race each other.
+  group: beta-${{ github.event_name == 'delete' && github.event.ref || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  KEEP: 3
+
+jobs:
+  publish:
+    if: github.event_name == 'push' && github.event.deleted != true && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020  # v7
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+      - name: Pick the beta version
+        id: version
+        env:
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Pre-release identifiers allow [0-9A-Za-z-] only, and an all-digit
+          # one can't have a leading zero, so prefix those.
+          slug=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//')
+          [[ -n "$slug" ]] || slug=branch
+          if [[ "$slug" =~ ^[0-9]+$ ]]; then slug="b$slug"; fi
+
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate \
+            --jq '.[].ref | sub("^refs/tags/"; "")')
+          stable=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<<"$tags" || true)
+          manifest=$(node -p "require('./manifest.json').version")
+          base=$(printf '%s\n%s\n' "$stable" "$manifest" | grep . | sort -V | tail -1)
+          IFS=. read -r major minor patch <<<"$base"
+          next="$major.$minor.$((patch + 1))"
+
+          last=$(grep -E "^${next//./\\.}-${slug}\.[0-9]+$" <<<"$tags" \
+            | sed -E 's/.*\.([0-9]+)$/\1/' | sort -n | tail -1 || true)
+          version="$next-$slug.$(( ${last:-0} + 1 ))"
+
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Beta version: $version"
+
+      - name: Publish the pre-release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/beta"
+          mkdir -p "$out"
+          cp main.js styles.css "$out/"
+          node -e "
+            const fs = require('fs');
+            const m = JSON.parse(fs.readFileSync('manifest.json', 'utf8'));
+            m.version = process.argv[1];
+            fs.writeFileSync(process.argv[2], JSON.stringify(m, null, 2) + '\n');
+          " "$VERSION" "$out/manifest.json"
+
+          gh release create "$VERSION" "$out/main.js" "$out/manifest.json" "$out/styles.css" \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --prerelease --latest=false --title "$VERSION" \
+            --notes "Beta of branch \`$BRANCH\` at $GITHUB_SHA. Install with BRAT by choosing version \`$VERSION\`."
+
+      - name: Keep the newest ${{ env.KEEP }} betas of this branch
+        env:
+          SLUG: ${{ steps.version.outputs.slug }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          old=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate \
+            --jq '.[].ref | sub("^refs/tags/"; "")' \
+            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-${SLUG}\.[0-9]+$" | sort -V | head -n "-$KEEP" || true)
+          for tag in $old; do
+            echo "Deleting $tag"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes \
+              || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+          done
+
+  cleanup:
+    if: github.event_name == 'delete' && github.event.ref_type == 'branch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Delete the deleted branch's betas
+        env:
+          BRANCH: ${{ github.event.ref }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Same slug rule as publish.
+          slug=$(printf '%s' "$BRANCH" | tr '[:upper:]' '[:lower:]' \
+            | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//' | cut -c1-40 | sed -E 's/-+$//')
+          [[ -n "$slug" ]] || slug=branch
+          if [[ "$slug" =~ ^[0-9]+$ ]]; then slug="b$slug"; fi
+
+          tags=$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/" --paginate \
+            --jq '.[].ref | sub("^refs/tags/"; "")' \
+            | grep -E "^[0-9]+\.[0-9]+\.[0-9]+-${slug}\.[0-9]+$" || true)
+          for tag in $tags; do
+            echo "Deleting $tag"
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes \
+              || gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/$tag"
+          done
