@@ -227,6 +227,7 @@ export class AgentLoop {
       fullMessage = `${contextPrefix}\n\n${userMessage}`;
     }
 
+    this.closeInterruptedToolCalls();
     this.messages.push({ role: "user", content: fullMessage });
 
     // Prune if conversation is too long
@@ -337,6 +338,30 @@ export class AgentLoop {
     callbacks.onError(
       `Reached maximum iterations (${maxIterations}). The task may be too complex for a single conversation turn.`
     );
+  }
+
+  /**
+   * A turn stopped between a tool call and its result (Stop, or a reload while
+   * ask_user waits) leaves the assistant's tool_use unanswered, and both APIs
+   * reject the next request for it. Answer each call as interrupted. A chained
+   * OpenAI conversation only sends the newest message, so the server-side
+   * response still holds the open call; drop the chain and replay the history.
+   */
+  private closeInterruptedToolCalls(): void {
+    const last = this.messages[this.messages.length - 1];
+    if (!last || last.role !== "assistant" || typeof last.content === "string") return;
+    const calls = last.content.filter((b) => b.type === "tool_use");
+    if (calls.length === 0) return;
+    this.messages.push({
+      role: "user",
+      content: calls.map((tc) => ({
+        type: "tool_result",
+        tool_use_id: tc.id,
+        content: "The user stopped this before it finished.",
+        is_error: true,
+      })),
+    });
+    clearOpenAIState(this.openaiState);
   }
 
   /**
