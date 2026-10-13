@@ -212,7 +212,7 @@ export class ObsidianChatView extends ItemView {
       if (i === rememberedFrom && i > 0) chat.addDivider();
       switch (entry.type) {
         case "user":
-          chat.addUserMessage(entry.text ?? "");
+          chat.addUserMessage(entry.text ?? "", entry.selection);
           break;
         case "assistant":
           chat.addAssistantMessage(entry.text ?? "");
@@ -248,7 +248,7 @@ export class ObsidianChatView extends ItemView {
     switch (event.kind) {
       case "message": {
         const entry = event.entry;
-        if (entry.type === "user") chat.addUserMessage(entry.text ?? "");
+        if (entry.type === "user") chat.addUserMessage(entry.text ?? "", entry.selection);
         else if (entry.type === "assistant") chat.addAssistantMessage(entry.text ?? "");
         else if (entry.type === "error") chat.addError(entry.text ?? "");
         else if (entry.type === "notice") chat.addNotice(entry.text ?? "");
