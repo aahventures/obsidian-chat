@@ -133,6 +133,8 @@ export interface ChatHistoryEntry {
    */
   type: string;
   text?: string;
+  /** On a "user" entry: the editor selection sent along with the message. */
+  selection?: SelectionScope;
   /** The tool_use id, matching a result back to its call. */
   toolId?: string;
   toolName?: string;

@@ -202,7 +202,7 @@ export class SessionStore {
     const turn = ++session.turn;
     session.running = true;
     this.emit(session, { kind: "running", running: true });
-    this.append(session, { type: "user", text });
+    this.append(session, selection ? { type: "user", text, selection } : { type: "user", text });
 
     const title = session.title;
     session.maybeTitleFrom(text);
