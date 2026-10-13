@@ -94,6 +94,8 @@ export class ObsidianChatView extends ItemView {
         // Sessions change outside this pane too (created, discarded, deleted,
         // renamed elsewhere), so refresh the list whenever it's opened.
         onRefreshSessions: () => this.refreshSwitcher(),
+        // A function, not a value, so toggling the setting applies to open chats.
+        fileLinkMenuEnabled: () => this.plugin.settings.fileLinkMenu,
       },
     });
 

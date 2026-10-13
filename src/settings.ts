@@ -254,6 +254,20 @@ export class ChatSettingTab extends PluginSettingTab {
         );
     }
 
+    // ─── File link menu ───────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("File link suggestions")
+      .setDesc(
+        "Typing [[ in the chat input suggests vault files and adds the closing ]]. " +
+          "Turn off if you find it distracting or it feels slow in a large vault."
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(s.fileLinkMenu).onChange(async (value) => {
+          s.fileLinkMenu = value;
+          await this.plugin.saveSettings();
+        })
+      );
+
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
       .setName("Max tool iterations")
