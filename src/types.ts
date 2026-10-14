@@ -11,6 +11,10 @@ export interface ChatSettings {
   baseUrl: string;
   /** Typing [[ in the chat input suggests vault files and adds the closing ]]. */
   fileLinkMenu: boolean;
+  /** Vault folder holding skills as `<name>/SKILL.md`. Empty for none. */
+  skillsFolder: string;
+  /** Desktop only: also read Claude Code's skills from `~/.claude/skills`. */
+  claudeSkills: boolean;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -21,6 +25,8 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   enableWebSearch: true,
   baseUrl: "",
   fileLinkMenu: true,
+  skillsFolder: "Skills",
+  claudeSkills: true,
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────

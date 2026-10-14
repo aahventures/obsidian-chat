@@ -13,6 +13,7 @@ import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
+import { getSkills, resolveSkill } from "../skills/store";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -206,6 +207,8 @@ export class AgentLoop {
     const generation = ++this.generation;
     const stopped = () => generation !== this.generation;
 
+    userMessage = expandSkillCommand(userMessage);
+
     // Build context once per user turn and prepend to the user message
     const context = buildContext(this.app);
     const contextPrefix = buildContextMessage(context);
@@ -235,6 +238,10 @@ export class AgentLoop {
 
     // System prompt is static (cache-friendly). Built once, identical every call.
     const systemPrompt = buildSystemPrompt();
+    // use_skill is only worth a place in the tool list when there are skills.
+    const tools = getSkills().length > 0
+      ? TOOL_DEFINITIONS
+      : TOOL_DEFINITIONS.filter((t) => t.name !== "use_skill");
 
     debugLog(this.app, "USER_MESSAGE", { userMessage, hasSelection: !!selection });
 
@@ -250,7 +257,7 @@ export class AgentLoop {
         response = await sendMessage(
           this.settings,
           this.messages,
-          TOOL_DEFINITIONS,
+          tools,
           systemPrompt,
           this.openaiState
         );
@@ -349,4 +356,20 @@ export class AgentLoop {
     this.messages = trimToTurns(this.messages, KEEP_RECENT);
     return before - this.messages.filter(isTurnStart).length;
   }
+}
+
+/**
+ * `/write-in-my-voice draft a reply to Jason` → the skill's instructions,
+ * then the request. A unique prefix (`/write`) names a skill too. Anything
+ * that doesn't name a skill is sent as typed, so a message that merely starts
+ * with a slash (a path, say) is left alone.
+ */
+export function expandSkillCommand(message: string): string {
+  const m = /^\/([^\s[\]/]+)(?:\s+([\s\S]*))?$/.exec(message.trim());
+  if (!m) return message;
+  const skill = resolveSkill(m[1]);
+  if (!skill) return message;
+  const request = m[2]?.trim() ||
+    "(No request yet. Say in one line that you'll use this skill, and wait for the request.)";
+  return `[Skill: ${skill.name}]\n${skill.body}\n[End of skill]\n\n${request}`;
 }

@@ -1,6 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import type { ToolResult } from "../types";
 import { TOOL_DEFINITIONS } from "./registry";
+import { resolveSkill, readSkillFile } from "../skills/store";
 
 type AskUserCallback = (question: string) => Promise<string>;
 
@@ -73,6 +74,8 @@ export async function executeTool(
         return await openDocument(app, input);
       case "ask_user":
         return await askUser(input, onAskUser);
+      case "use_skill":
+        return await useSkill(app, input);
       default:
         return { result: `Unknown tool: ${toolName}`, isError: true };
     }
@@ -553,4 +556,29 @@ async function askUser(
 
   const answer = await onAskUser(question);
   return { result: answer, isError: false };
+}
+
+// ─── use_skill ──────────────────────────────────────────────────────────────
+
+async function useSkill(app: App, input: Record<string, unknown>): Promise<ToolResult> {
+  const name = String(input.name);
+  const skill = resolveSkill(name);
+  if (!skill) return { result: `No skill named '${name}'.`, isError: true };
+
+  if (typeof input.file === "string" && input.file.trim()) {
+    const content = await readSkillFile(app, skill, input.file.trim());
+    if (content === null) {
+      return { result: `'${input.file}' isn't one of the files in skill '${skill.name}'.`, isError: true };
+    }
+    return { result: content, isError: false };
+  }
+
+  const parts = [skill.body];
+  if (skill.files.length > 0) {
+    parts.push(`Other files in this skill (read one with use_skill and file): ${skill.files.join(", ")}`);
+  }
+  if (skill.hasScripts) {
+    parts.push("This skill includes scripts, which can't run here. Follow its instructions as far as you can without them, and tell the user if a step needs one.");
+  }
+  return { result: parts.join("\n\n"), isError: false };
 }

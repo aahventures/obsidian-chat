@@ -248,4 +248,24 @@ export const TOOL_DEFINITIONS: UnifiedToolDef[] = [
       required: ["question"],
     },
   },
+  {
+    // Only offered when the user has skills (see AgentLoop.run).
+    name: "use_skill",
+    description:
+      "Load one of the user's skills, listed under Skills in the system prompt. Returns its instructions and the other files it has. Pass file to read one of those files.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+          description: "The skill's name, as listed.",
+        },
+        file: {
+          type: "string",
+          description: "A file the skill refers to, relative to the skill's folder (e.g. references/style.md). Omit to load the skill itself.",
+        },
+      },
+      required: ["name"],
+    },
+  },
 ];

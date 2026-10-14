@@ -1,4 +1,5 @@
 import type { ConversationContext } from "../types";
+import { getSkills } from "../skills/store";
 
 /**
  * The static system prompt that never changes across turns.
@@ -35,11 +36,20 @@ const STATIC_PROMPT = `You are Obsidian Chat, an AI assistant embedded in Obsidi
 - Keep summaries to 2-3 sentences unless more detail is requested.`;
 
 /**
- * Returns the static system prompt.
- * Identical across all API calls, enabling KV cache reuse.
+ * Returns the system prompt: the static prompt, plus the index of the user's
+ * skills when they have any. The index only changes when a skill is added,
+ * removed or edited, so the prompt stays identical across calls and the KV
+ * cache keeps hitting.
  */
 export function buildSystemPrompt(): string {
-  return STATIC_PROMPT;
+  const skills = getSkills();
+  if (skills.length === 0) return STATIC_PROMPT;
+  const index = skills.map((s) => `- ${s.name}: ${s.description}`).join("\n");
+  return `${STATIC_PROMPT}
+
+## Skills
+Skills are the user's saved instructions for particular kinds of task. When a request matches a skill's description, call use_skill with its name before you respond, then follow what it says. A message that starts with "[Skill: name]" already carries the skill; don't load it again.
+${index}`;
 }
 
 /**

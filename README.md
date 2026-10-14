@@ -23,7 +23,7 @@ That's it. Two providers. The best models. Fetch the full model list from the AP
 
 ## What the AI can do
 
-The chat assistant has 14 tools that map directly to Obsidian's Vault API:
+The chat assistant has 15 tools that map directly to Obsidian's Vault API:
 
 - **read_document** / **read_file**: Read any note in your vault
 - **edit_document**: Find-and-replace, insert, or replace content
@@ -38,12 +38,22 @@ The chat assistant has 14 tools that map directly to Obsidian's Vault API:
 - **get_backlinks**: Find all notes that link to a given document
 - **get_current_datetime**: Get the current date and time in the user's locale
 - **ask_user**: Ask you a question when something is ambiguous
+- **use_skill**: Load one of your skills (only offered when you have some)
 
 The AI reads before it edits, prefers surgical find-and-replace over full rewrites, and acts on your confirmations without re-asking.
 
 ## Selection scope
 
 Select text in a note, right-click, and choose "Send selection to Chat". The selection appears as a pill above the input. The AI works only within that selection, leaving the rest of the document untouched. Dismiss the pill to go back to full-document mode.
+
+## Skills
+
+Skills are saved instructions for a kind of task, in Claude Code's format: a folder per skill with a `SKILL.md` that has a `name` and `description` in its frontmatter.
+
+- **Where they come from**: a folder in your vault (Settings > Skills folder, default `Skills`), which syncs like any note so it works on mobile. On desktop the chat also reads `~/.claude/skills`, including the skills Claude Code syncs from your claude.ai account. A vault skill wins over a Claude Code one with the same name.
+- **Using one**: just ask, and the chat loads a skill whose description matches. Or type `/` at the start of a message to pick one; a unique prefix like `/write` works too.
+- **Getting them to your phone**: on desktop, "Copy Claude Code skills to vault" (a command, and a button in settings) copies `~/.claude/skills` into the skills folder.
+- **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
 ## Install
 
@@ -79,6 +89,8 @@ Select text in a note, right-click, and choose "Send selection to Chat". The sel
 | Send selection to Chat | Send selected text with scoped context |
 | Copy conversation transcript | Export the active session's conversation to clipboard |
 | Clear conversation | Empty the active session (keeps the session) |
+| Reload skills | Re-read the skills folder and `~/.claude/skills` |
+| Copy Claude Code skills to vault | Desktop: copy `~/.claude/skills` into the skills folder |
 
 ## Chat sessions
 

@@ -30,6 +30,8 @@
     onRefreshSessions: () => void;
     /** Whether typing [[ suggests files; read live so the setting applies at once. */
     fileLinkMenuEnabled: () => boolean;
+    /** The skills a / at the start of a message offers; read live, as they reload. */
+    skills: () => Array<{ name: string; description: string }>;
   }
 
   let {
@@ -44,6 +46,7 @@
     onSelectSession,
     onRefreshSessions,
     fileLinkMenuEnabled,
+    skills,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -168,9 +171,11 @@
    */
   export function clearInput(): void {
     inputText = "";
-    // An open [[ menu is part of the draft too.
+    // An open [[ or / menu is part of the draft too.
     mention = null;
     dismissedStart = -1;
+    slash = null;
+    slashDismissed = false;
     resetHeight();
   }
 
@@ -224,6 +229,8 @@
     inputText = "";
     mention = null;
     dismissedStart = -1;
+    slash = null;
+    slashDismissed = false;
     resetHeight();
 
     // An answer is a tool result, not a turn, so it can't carry the selection:
@@ -248,13 +255,35 @@
 
   /** The [[query being typed at the caret, or null. `start` is the index of the [[. */
   let mention = $state<{ start: number; query: string } | null>(null);
-  let mentionIndex = $state(0);
+  let menuIndex = $state(0);
   /** A [[ escaped out of: stays plain text until the caret leaves it. */
   let dismissedStart = -1;
   let menuEl: HTMLElement | undefined = $state();
 
   const mentionResults = $derived(mention ? searchFiles(mention.query) : []);
-  const menuOpen = $derived(mentionResults.length > 0);
+
+  /** The /query being typed at the start of the message, or null. See updateSlash. */
+  let slash = $state<{ query: string } | null>(null);
+  const slashResults = $derived(slash ? searchSkills(slash.query) : []);
+  /** Escaped out of: stays closed until the / is gone or the message moves on. */
+  let slashDismissed = false;
+
+  /** A row of the input menu, which lists files after [[ or skills after /. */
+  interface MenuItem {
+    key: string;
+    name: string;
+    detail: string;
+  }
+  const menuItems = $derived<MenuItem[]>(
+    mention
+      ? mentionResults.map((f) => ({
+          key: f.path,
+          name: f.name,
+          detail: f.parent?.path === "/" ? "" : (f.parent?.path ?? ""),
+        }))
+      : slashResults.map((k) => ({ key: k.name, name: `/${k.name}`, detail: k.description }))
+  );
+  const menuOpen = $derived(menuItems.length > 0);
 
   /**
    * Keep the highlighted row visible. Only the arrow keys call this: scrolling
@@ -314,7 +343,7 @@
       return;
     }
     if (mention?.start === start && mention.query === m[1]) return;
-    mentionIndex = 0;
+    menuIndex = 0;
     if (menuEl) menuEl.scrollTop = 0;
     mention = { start, query: m[1] };
   }
@@ -344,6 +373,73 @@
     });
   }
 
+  // ─── / skills ─────────────────────────────────────────────────────────
+  // A / at the very start of a message opens a menu of skills, filtered by
+  // what follows it. Picking one completes /name and a space; the agent loop
+  // expands it into the skill's instructions when the message is sent.
+
+  function searchSkills(query: string): Array<{ name: string; description: string }> {
+    const all = skills();
+    if (!query) return all;
+    const match = prepareFuzzySearch(query);
+    const scored: { skill: { name: string; description: string }; score: number }[] = [];
+    for (const skill of all) {
+      const result = match(skill.name);
+      if (result) scored.push({ skill, score: result.score });
+    }
+    return scored.sort((a, b) => b.score - a.score).map((s) => s.skill);
+  }
+
+  /** Like updateMention: only typing opens the menu; moving the caret can close it. */
+  function updateSlash(typing: boolean): void {
+    // An answer to ask_user isn't a turn, so a skill can't ride on it.
+    if (!textareaEl || awaitingAnswer) {
+      slash = null;
+      return;
+    }
+    const before = textareaEl.value.slice(0, textareaEl.selectionStart);
+    const m = /^\/([^\s[\]/]*)$/.exec(before);
+    if (!m) {
+      slash = null;
+      slashDismissed = false;
+      return;
+    }
+    if (slashDismissed || (!typing && !slash)) {
+      slash = null;
+      return;
+    }
+    if (slash?.query === m[1]) return;
+    menuIndex = 0;
+    if (menuEl) menuEl.scrollTop = 0;
+    slash = { query: m[1] };
+  }
+
+  /** /wri|te foo → /write-in-my-voice foo, caret after the space. */
+  function confirmSlash(skill: { name: string } | undefined): void {
+    if (!skill || !textareaEl) return;
+    const caret = textareaEl.selectionStart;
+    const head = `/${skill.name} `;
+    // Drop the rest of the half-typed name after the caret, and one space.
+    const tail = inputText.slice(caret).replace(/^[^\s]*/, "").replace(/^ /, "");
+    inputText = head + tail;
+    slash = null;
+    void tick().then(() => {
+      textareaEl?.focus();
+      textareaEl?.setSelectionRange(head.length, head.length);
+      autoGrow();
+    });
+  }
+
+  function updateMenus(typing: boolean): void {
+    updateMention(typing);
+    updateSlash(typing);
+  }
+
+  function confirmMenu(i: number): void {
+    if (mention) confirmMention(mentionResults[i]);
+    else confirmSlash(slashResults[i]);
+  }
+
   function handleKeydown(e: KeyboardEvent): void {
     // Enter confirms an IME candidate (CJK input); it must not send. keyCode
     // 229 covers browsers that fire keydown after compositionend.
@@ -371,24 +467,29 @@
       }
     }
 
-    if (menuOpen && fileLinkMenuEnabled()) {
+    if (menuOpen && (slash || fileLinkMenuEnabled())) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        const n = mentionResults.length;
-        mentionIndex = (mentionIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        const n = menuItems.length;
+        menuIndex = (menuIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
         scrollSelectedIntoView();
         return;
       }
       if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
-        confirmMention(mentionResults[mentionIndex]);
+        confirmMenu(menuIndex);
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        dismissedStart = mention?.start ?? -1;
-        mention = null;
+        if (mention) {
+          dismissedStart = mention.start;
+          mention = null;
+        } else {
+          slashDismissed = true;
+          slash = null;
+        }
         return;
       }
     }
@@ -403,6 +504,7 @@
     if (!fileLinkMenuEnabled()) {
       mention = null;
       autoGrow();
+      updateSlash(true);
       return;
     }
     const ie = e as InputEvent;
@@ -419,7 +521,7 @@
       }
     }
     autoGrow();
-    updateMention(true);
+    updateMenus(true);
   }
 
   /**
@@ -732,19 +834,19 @@
     </div>
   {/if}
 
-  <!-- [[ file menu -->
+  <!-- [[ file menu and / skills menu -->
   {#if menuOpen}
     <div class="ochat-mention-menu" bind:this={menuEl}>
-      {#each mentionResults as file, i (file.path)}
+      {#each menuItems as item, i (item.key)}
         <button
           class="ochat-mention-item"
-          class:ochat-mention-selected={i === mentionIndex}
+          class:ochat-mention-selected={i === menuIndex}
           onmousedown={keepFocus}
-          onmousemove={() => (mentionIndex = i)}
-          onclick={() => confirmMention(file)}
+          onmousemove={() => (menuIndex = i)}
+          onclick={() => confirmMenu(i)}
         >
-          <span class="ochat-mention-name">{file.name}</span>
-          <span class="ochat-mention-path">{file.parent?.path === "/" ? "" : file.parent?.path}</span>
+          <span class="ochat-mention-name">{item.name}</span>
+          <span class="ochat-mention-path">{item.detail}</span>
         </button>
       {/each}
     </div>
@@ -760,9 +862,12 @@
       rows="1"
       onkeydown={handleKeydown}
       oninput={handleInput}
-      onkeyup={() => updateMention(false)}
-      onclick={() => updateMention(false)}
-      onblur={() => (mention = null)}
+      onkeyup={() => updateMenus(false)}
+      onclick={() => updateMenus(false)}
+      onblur={() => {
+        mention = null;
+        slash = null;
+      }}
     ></textarea>
     {#if inputEnabled}
       <button

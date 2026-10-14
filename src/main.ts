@@ -2,6 +2,7 @@ import {
   Plugin,
   Platform,
   Notice,
+  debounce,
   type MarkdownFileInfo,
   type Editor,
   Menu,
@@ -15,6 +16,14 @@ import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore, fromForkSessionsFile } from "./sessions";
 import { SessionSwitcherModal } from "./ui/session-switcher";
+import {
+  claudeSkillsDir,
+  clearSkills,
+  copyClaudeSkillsToVault,
+  getSkills,
+  loadSkills,
+  skillsFolderPath,
+} from "./skills/store";
 
 const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
 /** Written by a fork of this plugin that had sessions first; imported once. */
@@ -47,6 +56,23 @@ export default class ChatPlugin extends Plugin {
     await this.loadChatHistory();
 
     this.addSettingTab(new ChatSettingTab(this.app, this));
+
+    // Skills load once the vault is ready. From then on, a change in the skills
+    // folder (an edit, or a skill arriving by sync) reloads them. Registered
+    // after layout-ready so the startup index doesn't fire a create per file.
+    this.app.workspace.onLayoutReady(() => {
+      void this.reloadSkills();
+      const onVaultChange = (file: TAbstractFile, oldPath?: string) => {
+        const folder = skillsFolderPath(this.settings.skillsFolder);
+        if (!folder) return;
+        const inFolder = (p: string) => p === folder || p.startsWith(folder + "/");
+        if (inFolder(file.path) || (oldPath && inFolder(oldPath))) this.scheduleSkillReload();
+      };
+      this.registerEvent(this.app.vault.on("create", onVaultChange));
+      this.registerEvent(this.app.vault.on("modify", onVaultChange));
+      this.registerEvent(this.app.vault.on("delete", onVaultChange));
+      this.registerEvent(this.app.vault.on("rename", onVaultChange));
+    });
 
     // Register sidebar view (loads deferred by default in v1.7.2+)
     this.registerView(VIEW_TYPE_CHAT, (leaf) => new ObsidianChatView(leaf, this));
@@ -120,6 +146,26 @@ export default class ChatPlugin extends Plugin {
       callback: () => this.openSessionSwitcher(),
     });
 
+    this.addCommand({
+      id: "reload-skills",
+      name: "Reload skills",
+      callback: async () => {
+        await this.reloadSkills();
+        new Notice(`Loaded ${getSkills().length} skills`);
+      },
+    });
+
+    this.addCommand({
+      id: "copy-claude-skills",
+      name: "Copy Claude Code skills to vault",
+      // Desktop with Claude Code only; mobile has no ~/.claude to copy from.
+      checkCallback: (checking) => {
+        if (!claudeSkillsDir() || !skillsFolderPath(this.settings.skillsFolder)) return false;
+        if (!checking) void this.copyClaudeSkills();
+        return true;
+      },
+    });
+
     // Editor command: chat about the current note (only when editor is active)
     this.addCommand({
       id: "chat-about-note",
@@ -178,6 +224,8 @@ export default class ChatPlugin extends Plugin {
   }
 
   async onunload(): Promise<void> {
+    this.scheduleSkillReload.cancel();
+    clearSkills();
     // The only place turns are stopped wholesale. Closing a view doesn't.
     this.sessions.abortAll();
     await this.saveChatHistory();
@@ -570,6 +618,35 @@ export default class ChatPlugin extends Plugin {
       return JSON.parse(await this.app.vault.adapter.read(path));
     } catch {
       return null;
+    }
+  }
+
+  // ─── Skills ──────────────────────────────────────────────────────────
+
+  reloadSkills(): Promise<void> {
+    return loadSkills(this.app, this.settings.skillsFolder, this.settings.claudeSkills);
+  }
+
+  /** Bursts of changes (a sync bringing in a whole skill) become one reload. */
+  scheduleSkillReload = debounce(() => void this.reloadSkills(), 1000, true);
+
+  /** Copy Claude Code's skills into the skills folder, so they sync to other devices. */
+  async copyClaudeSkills(): Promise<number> {
+    if (!skillsFolderPath(this.settings.skillsFolder)) {
+      new Notice("Set a skills folder first");
+      return 0;
+    }
+    try {
+      const n = await copyClaudeSkillsToVault(this.app, this.settings.skillsFolder);
+      await this.reloadSkills();
+      new Notice(n > 0
+        ? `Copied ${n} skills to ${skillsFolderPath(this.settings.skillsFolder)}`
+        : "No Claude Code skills found to copy");
+      return n;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      new Notice(`Couldn't copy skills: ${msg}`);
+      return 0;
     }
   }
 

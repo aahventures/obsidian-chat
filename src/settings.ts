@@ -1,4 +1,16 @@
-import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import {
+  AbstractInputSuggest,
+  App,
+  Notice,
+  Platform,
+  PluginSettingTab,
+  Setting,
+  TFolder,
+  debounce,
+  prepareFuzzySearch,
+  requestUrl,
+} from "obsidian";
+import { claudeSkillsDir, getSkills } from "./skills/store";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
 
@@ -268,6 +280,8 @@ export class ChatSettingTab extends PluginSettingTab {
         })
       );
 
+    this.displaySkills(containerEl);
+
     // ─── Max iterations ───────────────────────────────────────────────
     new Setting(containerEl)
       .setName("Max tool iterations")
@@ -284,6 +298,124 @@ export class ChatSettingTab extends PluginSettingTab {
             }
           })
       );
+  }
+
+  private displaySkills(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    new Setting(containerEl).setName("Skills").setHeading();
+
+    const summary = () => {
+      const loaded = getSkills();
+      return loaded.length === 0
+        ? "None found."
+        : `${loaded.length}: ${loaded.map((k) => k.name).join(", ")}.`;
+    };
+    // Set at the end of this section; refreshed in place, since redrawing the
+    // tab while the folder is being typed would take focus out of the field.
+    let loadedSetting: Setting | undefined;
+    const reload = async () => {
+      await this.plugin.reloadSkills();
+      loadedSetting?.setDesc(summary());
+    };
+    // Reloading on every keystroke would read the disk for each letter.
+    const reloadSoon = debounce(() => void reload(), 800, true);
+
+    new Setting(containerEl)
+      .setName("Skills folder")
+      .setDesc(
+        "A vault folder of skills, each in its own folder as <name>/SKILL.md (Claude Code's format). " +
+          "It syncs like any note, so skills here work on mobile too. " +
+          "Type / at the start of a message to pick one, or just ask and the chat uses a matching skill on its own."
+      )
+      .addText((text) => {
+        text
+          .setPlaceholder("Skills")
+          .setValue(s.skillsFolder)
+          .onChange(async (value) => {
+            s.skillsFolder = value.trim();
+            await this.plugin.saveSettings();
+            reloadSoon();
+          });
+        new FolderSuggest(this.app, text.inputEl, async (path) => {
+          s.skillsFolder = path;
+          await this.plugin.saveSettings();
+          reloadSoon();
+        });
+      });
+
+    // Desktop only: phones have no ~/.claude to read.
+    if (Platform.isDesktopApp) {
+      const hasClaude = claudeSkillsDir() !== null;
+      new Setting(containerEl)
+        .setName("Use Claude Code skills")
+        .setDesc(
+          hasClaude
+            ? "Also read the skills in ~/.claude/skills, including the ones Claude Code syncs from your claude.ai account. A skill in the vault folder wins over one with the same name."
+            : "Also read the skills in ~/.claude/skills. Claude Code doesn't seem to be set up on this computer."
+        )
+        .addToggle((toggle) =>
+          toggle.setValue(s.claudeSkills).onChange(async (value) => {
+            s.claudeSkills = value;
+            await this.plugin.saveSettings();
+            await reload();
+          })
+        );
+
+      if (hasClaude) {
+        new Setting(containerEl)
+          .setName("Copy Claude Code skills to vault")
+          .setDesc(
+            "Copies ~/.claude/skills into the skills folder, so your phone gets them through sync. " +
+              "Overwrites earlier copies; run it again after changing a skill in Claude Code or claude.ai."
+          )
+          .addButton((button) =>
+            button
+              .setButtonText("Copy")
+              .onClick(async () => {
+                button.setDisabled(true);
+                await this.plugin.copyClaudeSkills();
+                loadedSetting?.setDesc(summary());
+                button.setDisabled(false);
+              })
+          );
+      }
+    }
+
+    loadedSetting = new Setting(containerEl)
+      .setName("Loaded skills")
+      .setDesc(summary())
+      .addButton((button) => button.setButtonText("Reload").onClick(reload));
+  }
+}
+
+// ─── Skills ─────────────────────────────────────────────────────────────────
+
+/** Suggests vault folders as you type, for the skills folder setting. */
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  constructor(app: App, private inputEl: HTMLInputElement, private onPick: (path: string) => void) {
+    super(app, inputEl);
+  }
+
+  getSuggestions(query: string): TFolder[] {
+    const folders = this.app.vault.getAllFolders(false);
+    if (!query) return folders.slice(0, 20);
+    const match = prepareFuzzySearch(query);
+    return folders
+      .map((f) => ({ f, r: match(f.path) }))
+      .filter((x) => x.r)
+      .sort((a, b) => b.r!.score - a.r!.score)
+      .slice(0, 20)
+      .map((x) => x.f);
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path);
+  }
+
+  selectSuggestion(folder: TFolder): void {
+    this.inputEl.value = folder.path;
+    this.onPick(folder.path);
+    this.close();
   }
 }
 

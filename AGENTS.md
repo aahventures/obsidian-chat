@@ -41,6 +41,8 @@ src/
     chat-view.ts         # ItemView: one pane onto one session
     ChatContainer.svelte # All chat UI: messages, input, selection pill
     session-switcher.ts  # "Switch chat" picker (SuggestModal), beside the header dropdown
+  skills/
+    store.ts             # Loads skills (vault folder + ~/.claude/skills on desktop), resolves /names
   util/
     diff.ts              # Line diff for find_replace results
 ```
@@ -58,6 +60,7 @@ src/
 - **Chat persistence**: `chat-state.json` in the plugin folder, which syncs between devices. Saves are debounced, serialized, re-read the file, keep sessions this device doesn't know, and carry deletes as tombstones. `chat-sessions.json` from the fork that had sessions first is imported once.
 - **File links**: Typing `[[` in the input adds the closing `]]` and opens an inline menu of vault files above it, filtered by the text between the brackets (spaces included; Obsidian's `prepareFuzzySearch` over the full path). Arrows move, Enter/Tab completes the link as `[[Note name]]` (Obsidian's `fileToLinktext`, so a folder appears only when two files share a name), esc closes it. The link is just text in the message, so the model sees it in place and history replays it; user bubbles containing `[[` render as markdown so the links are clickable. The system prompt tells the model to read linked notes, and the tools that read, edit or open a note resolve link text as well as exact paths (`findFile` in `executor.ts`; rename and delete stay exact-path). The menu opens only while typing, never on caret moves or clicks, so Enter inside a finished link still sends. The `fileLinkMenu` setting (settings tab, on by default) turns the menu, the auto-added `]]` and the Backspace pairing off; typed links still render and work.
 - **Selection scope**: Injected into user message with scoping instructions. Model uses `find_replace` within selection text.
+- **Skills**: Claude Code format (`<name>/SKILL.md`). Read from the vault skills folder on every platform and `~/.claude/skills` (including `synced/<account>/`) on desktop via `window.require`, so the bundle still loads on mobile. Vault wins on a name clash. The name/description index is appended to the system prompt (stable unless skills change, so caching holds); `use_skill` loads one and is only offered when skills exist. `/name` at the start of a message is expanded into the skill's body in `AgentLoop.run`; the input's `/` menu shares the `[[` menu's markup and keys. A change in the skills folder reloads them.
 
 ## Build
 
@@ -87,6 +90,7 @@ npm run svelte-check   # Svelte check
 | get_backlinks | `metadataCache.resolvedLinks` | Finds linking notes |
 | get_current_datetime | `Date` | User's locale and timezone |
 | ask_user | UI callback | Pauses agent loop |
+| use_skill | `vault.adapter` / Node `fs` | Skill body, or one of its files |
 
 ## Debug
 
