@@ -82,6 +82,69 @@
     }
   });
 
+  // ─── Message rail: a miniature map of the user's messages ─────────────
+  interface RailTick {
+    id: number;
+    /** 0..1 position of the message within the whole scrollable conversation. */
+    frac: number;
+    text: string;
+  }
+  let railTicks = $state<RailTick[]>([]);
+  let railActiveId = $state<number | null>(null);
+  let railHoverId = $state<number | null>(null);
+
+  function userBubble(id: number): HTMLElement | null {
+    return messagesEl?.querySelector<HTMLElement>(`[data-msg-id="${id}"]`) ?? null;
+  }
+
+  function measureRail(): void {
+    if (!messagesEl) return;
+    const box = messagesEl.getBoundingClientRect();
+    const total = messagesEl.scrollHeight || 1;
+    const ticks: RailTick[] = [];
+    let active: number | null = null;
+    for (const msg of messages) {
+      if (msg.type !== "user") continue;
+      const el = userBubble(msg.id);
+      if (!el) continue;
+      const top = el.getBoundingClientRect().top - box.top + messagesEl.scrollTop;
+      ticks.push({ id: msg.id, frac: Math.min(top / total, 1), text: (msg.text ?? "").trim() });
+      if (top <= messagesEl.scrollTop + messagesEl.clientHeight * 0.4) active = msg.id;
+    }
+    railTicks = ticks;
+    railActiveId = active ?? ticks[0]?.id ?? null;
+  }
+
+  let railFrame = 0;
+  function scheduleRail(): void {
+    if (railFrame) return;
+    railFrame = requestAnimationFrame(() => {
+      railFrame = 0;
+      measureRail();
+    });
+  }
+
+  // Content grows while streaming and markdown renders late, so watch the DOM
+  // and the pane size rather than just the message count.
+  $effect(() => {
+    if (!messagesEl) return;
+    const mutations = new MutationObserver(scheduleRail);
+    mutations.observe(messagesEl, { childList: true, subtree: true, characterData: true });
+    const resizes = new ResizeObserver(scheduleRail);
+    resizes.observe(messagesEl);
+    scheduleRail();
+    return () => {
+      mutations.disconnect();
+      resizes.disconnect();
+      if (railFrame) cancelAnimationFrame(railFrame);
+      railFrame = 0;
+    };
+  });
+
+  function jumpTo(id: number): void {
+    userBubble(id)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }
+
   // ─── Public API (called from chat-view.ts / chat-modal.ts) ────────────
 
   export function addUserMessage(text: string, selection?: SelectionScope): void {
@@ -601,7 +664,30 @@
   </div>
 
   <!-- Messages -->
-  <div class="ochat-messages" bind:this={messagesEl}>
+  <div class="ochat-messages-wrap">
+  {#if railTicks.length >= 2}
+    <div class="ochat-rail" role="navigation" aria-label="Your messages" onmouseleave={() => (railHoverId = null)}>
+      {#each railTicks as t (t.id)}
+        <button
+          class="ochat-rail-tick"
+          class:active={t.id === railActiveId}
+          style="top: {t.frac * 100}%"
+          aria-label={t.text.slice(0, 80) || "Message"}
+          onmouseenter={() => (railHoverId = t.id)}
+          onfocus={() => (railHoverId = t.id)}
+          onblur={() => (railHoverId = null)}
+          onpointerdown={() => (railHoverId = t.id)}
+          onclick={() => jumpTo(t.id)}
+        ></button>
+      {/each}
+      {#each railTicks as t (t.id)}
+        {#if t.id === railHoverId}
+          <div class="ochat-rail-tip" style="top: {t.frac * 100}%">{t.text}</div>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+  <div class="ochat-messages" bind:this={messagesEl} onscroll={scheduleRail}>
     {#each messages as msg (msg.id)}
       {#if msg.type === "user"}
         {#if msg.selection}
@@ -614,7 +700,7 @@
             <div class="ochat-msg-selection-full">{msg.selection.text}</div>
           </details>
         {/if}
-        <div class="ochat-msg ochat-user-msg">
+        <div class="ochat-msg ochat-user-msg" data-msg-id={msg.id}>
           {#if msg.text?.includes("[[")}
             <!-- Rendered so [[file links]] are clickable; other messages stay plain text -->
             <div class="ochat-msg-content" use:markdown={msg.text}></div>
@@ -706,6 +792,7 @@
         </div>
       {/if}
     {/each}
+  </div>
   </div>
 
   <!-- Selection pill -->
@@ -866,8 +953,16 @@
   }
 
   /* ─── Messages ──────────────────────────────────────────────────────── */
+  .ochat-messages-wrap {
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+    display: flex;
+  }
+
   .ochat-messages {
     flex: 1 1 0;
+    min-width: 0;
     overflow-y: auto;
     overscroll-behavior: contain;
     padding: 12px;
@@ -876,6 +971,72 @@
     gap: 8px;
     -webkit-user-select: text;
     user-select: text;
+  }
+
+  /* ─── Message rail ──────────────────────────────────────────────────── */
+  .ochat-rail {
+    position: absolute;
+    left: 0;
+    top: 8px;
+    bottom: 8px;
+    width: 14px;
+    z-index: 2;
+    pointer-events: none;
+  }
+
+  .ochat-rail-tick {
+    position: absolute;
+    left: 2px;
+    width: 8px;
+    height: 2px;
+    padding: 0;
+    border: none;
+    border-radius: 1px;
+    background: var(--text-faint);
+    box-shadow: none;
+    cursor: pointer;
+    pointer-events: auto;
+    transition: width 0.12s, background 0.12s;
+  }
+
+  /* Taller invisible hit area so a 2px tick is still easy to hit */
+  .ochat-rail-tick::before {
+    content: "";
+    position: absolute;
+    inset: -7px -2px;
+  }
+
+  .ochat-rail-tick:hover,
+  .ochat-rail-tick:focus-visible {
+    width: 12px;
+    background: var(--text-muted);
+  }
+
+  .ochat-rail-tick.active {
+    width: 12px;
+    background: var(--text-normal);
+  }
+
+  .ochat-rail-tip {
+    position: absolute;
+    left: 18px;
+    transform: translateY(-50%);
+    max-width: 200px;
+    padding: 6px 10px;
+    border-radius: var(--radius-m);
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    box-shadow: var(--shadow-s);
+    color: var(--text-normal);
+    font-size: var(--font-ui-smaller);
+    line-height: 1.4;
+    pointer-events: none;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
   }
 
   .ochat-msg {
