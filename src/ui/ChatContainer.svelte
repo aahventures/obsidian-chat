@@ -32,8 +32,8 @@
     fileLinkMenuEnabled: () => boolean;
     /** The skills a / at the start of a message offers; read live, as they reload. */
     skills: () => Array<{ name: string; description: string }>;
-    /** Files in the skills folder, which the [[ menu leaves out: they're settings, not notes. */
-    isSkillFile: (path: string) => boolean;
+    /** Folders of vault skills, each ending in "/". The [[ menu leaves their files out. */
+    skillDirs: () => string[];
   }
 
   let {
@@ -49,7 +49,7 @@
     onRefreshSessions,
     fileLinkMenuEnabled,
     skills,
-    isSkillFile,
+    skillDirs,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -299,10 +299,12 @@
   }
 
   function searchFiles(query: string): TFile[] {
-    const files = app.vault.getFiles().filter((f) => !isSkillFile(f.path));
+    // Worked out once per search, not per file.
+    const hidden = skillDirs();
+    const files = app.vault.getFiles().filter((f) => !hidden.some((dir) => f.path.startsWith(dir)));
     // No query yet: what you touched last is the likeliest target.
     if (!query) {
-      return [...files].sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
+      return files.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
     }
     // Same matcher as the Quick Switcher, run over the full path so
     // "src/agent/" narrows by folder too and spaces match separate words.
@@ -387,12 +389,13 @@
    * google-workspace (w…r) is noise.
    */
   function searchSkills(query: string): Array<{ name: string; description: string }> {
-    const all = skills();
     const q = query.toLowerCase();
-    if (!q) return all;
-    const hits = all.filter((k) => k.name.toLowerCase().includes(q));
-    const starts = hits.filter((k) => k.name.toLowerCase().startsWith(q));
-    return [...starts, ...hits.filter((k) => !starts.includes(k))];
+    if (!q) return skills();
+    const starts = (name: string) => (name.toLowerCase().startsWith(q) ? 0 : 1);
+    // sort is stable, so each group keeps the skills' own (alphabetical) order.
+    return skills()
+      .filter((k) => k.name.toLowerCase().includes(q))
+      .sort((a, b) => starts(a.name) - starts(b.name));
   }
 
   /** Like updateMention: only typing opens the menu; moving the caret can close it. */

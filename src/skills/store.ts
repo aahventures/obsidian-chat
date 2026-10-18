@@ -34,6 +34,8 @@ export interface Skill {
 /** A skill folder holding more than this is cut short rather than walked whole. */
 const MAX_FILES = 100;
 const SCRIPT_FILE = /(^|\/)scripts\/|\.(py|sh|bash|js|mjs|ts|rb|pl)$/i;
+/** What the copy to the vault carries: instructions and the text files they refer to. */
+const TEXT_FILE = /\.(md|txt|json|csv|tsv|ya?ml|xml|html?)$/i;
 
 let skills: Skill[] = [];
 /** Loads can overlap (a setting typed in, a file synced in); the newest wins. */
@@ -110,7 +112,8 @@ function parseSkill(
     source,
     dir,
     files,
-    hasScripts: files.some((f) => SCRIPT_FILE.test(f)),
+    // A copy in the vault has no scripts, but its instructions still name them.
+    hasScripts: files.some((f) => SCRIPT_FILE.test(f)) || /(^|[\s`(/])scripts\//.test(raw),
   };
 }
 
@@ -163,7 +166,6 @@ interface NodeModules {
     statSync(p: string): { isDirectory(): boolean };
     readdirSync(p: string): string[];
     readFileSync(p: string, encoding: "utf8"): string;
-    readFileSync(p: string): Uint8Array;
     realpathSync(p: string): string;
   };
   path: { join(...parts: string[]): string };
@@ -262,48 +264,51 @@ function listDiskFiles({ fs, path }: NodeModules, dir: string): string[] {
 
 export interface CopyResult {
   copied: string[];
-  /** Skills that need their scripts, which can't run here, so aren't worth syncing. */
-  skippedScripts: string[];
-  /** Skills whose real folder is already in the vault (symlinked into ~/.claude). */
-  skippedInVault: string[];
+  /** Skills whose scripts were left out, since scripts can't run here. */
+  withoutScripts: string[];
+  /** Skills whose real folder is already in the skills folder (symlinked into ~/.claude). */
+  alreadyThere: string[];
 }
 
 /**
  * Copy Claude Code's skills into the vault folder, so devices without Claude
- * Code (phones) get them through sync. Only instruction skills are copied, and
- * only their markdown: scripts can't run here, and their files (licences,
- * Python, assets) would turn up in the [[ menu and in searches. A skill
- * symlinked in from the vault is already there, so it isn't copied again.
- * Overwrites files of the same name and leaves anything else in the folder.
+ * Code (phones) get them through sync. Each skill's instructions and text
+ * files come across; scripts and binaries don't, since scripts can't run here.
+ * A skill whose real folder is already in the skills folder (symlinked into
+ * ~/.claude) is left as it is. Overwrites files of the same name, so a second
+ * copy refreshes the first, and leaves anything else in the folder alone.
  */
 export async function copyClaudeSkillsToVault(app: App, folderSetting: string): Promise<CopyResult> {
-  const result: CopyResult = { copied: [], skippedScripts: [], skippedInVault: [] };
+  const result: CopyResult = { copied: [], withoutScripts: [], alreadyThere: [] };
   const node = nodeModules();
   const folder = skillsFolderPath(folderSetting);
   if (!node || !folder) return result;
   const adapter = app.vault.adapter;
   const base = "getBasePath" in adapter && typeof adapter.getBasePath === "function"
-    ? realpath(node, adapter.getBasePath() as string)
+    ? node.path.join(adapter.getBasePath() as string, folder)
     : null;
+  const skillsRoot = base ? comparablePath(realpath(node, base)) : null;
 
-  for (const skill of readClaudeSkills()) {
-    if (skill.hasScripts) {
-      result.skippedScripts.push(skill.name);
+  // One skill per vault folder. Later ones win, as in loadSkills: an account's
+  // synced skill over a same-named one at the top of ~/.claude/skills.
+  const byFolder = new Map<string, Skill>();
+  for (const skill of readClaudeSkills()) byFolder.set(skill.dir.split(/[\\/]/).pop()!, skill);
+
+  for (const [folderName, skill] of byFolder) {
+    const real = comparablePath(realpath(node, skill.dir));
+    if (skillsRoot && (real === skillsRoot || real.startsWith(skillsRoot + "/"))) {
+      result.alreadyThere.push(skill.name);
       continue;
     }
-    const real = realpath(node, skill.dir);
-    if (base && (real === base || real.startsWith(base + "/") || real.startsWith(base + "\\"))) {
-      result.skippedInVault.push(skill.name);
-      continue;
-    }
-    const target = `${folder}/${skill.dir.split(/[\\/]/).pop()}`;
-    for (const rel of ["SKILL.md", ...skill.files.filter((f) => /\.md$/i.test(f))]) {
+    const target = `${folder}/${folderName}`;
+    for (const rel of ["SKILL.md", ...skill.files.filter((f) => TEXT_FILE.test(f) && !SCRIPT_FILE.test(f))]) {
       const dest = normalizePath(`${target}/${rel}`);
       const parent = dest.slice(0, dest.lastIndexOf("/"));
       if (!(await adapter.exists(parent))) await adapter.mkdir(parent);
       await adapter.write(dest, node.fs.readFileSync(node.path.join(skill.dir, rel), "utf8"));
     }
     result.copied.push(skill.name);
+    if (skill.hasScripts) result.withoutScripts.push(skill.name);
   }
   return result;
 }
@@ -314,6 +319,21 @@ function realpath(node: NodeModules, p: string): string {
   } catch {
     return p;
   }
+}
+
+/** Forward slashes, no trailing one, and one case where the disk ignores case (macOS, Windows). */
+function comparablePath(p: string): string {
+  const slashed = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return Platform.isMacOS || Platform.isWin ? slashed.toLowerCase() : slashed;
+}
+
+/**
+ * The folders of the skills loaded from the vault, each ending in "/". The [[
+ * menu leaves files in them out: they're settings, not notes. Other notes in
+ * the skills folder stay.
+ */
+export function vaultSkillDirs(): string[] {
+  return skills.filter((s) => s.source === "vault").map((s) => s.dir + "/");
 }
 
 /** Whether a vault path is inside the skills folder. */

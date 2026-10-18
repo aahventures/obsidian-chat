@@ -646,11 +646,11 @@ export default class ChatPlugin extends Plugin {
           ? `Copied ${r.copied.length} skills to ${folder}.`
           : "No skills to copy.",
       ];
-      if (r.skippedScripts.length > 0) {
-        lines.push(`Skipped ${r.skippedScripts.length} that need scripts: ${r.skippedScripts.join(", ")}.`);
+      if (r.withoutScripts.length > 0) {
+        lines.push(`Scripts left out, as they can't run here: ${nameList(r.withoutScripts)}.`);
       }
-      if (r.skippedInVault.length > 0) {
-        lines.push(`Already in the vault: ${r.skippedInVault.join(", ")}.`);
+      if (r.alreadyThere.length > 0) {
+        lines.push(`Already in ${folder}: ${nameList(r.alreadyThere)}.`);
       }
       new Notice(lines.join("\n"), 8000);
     } catch (e) {
@@ -707,4 +707,10 @@ export default class ChatPlugin extends Plugin {
       // SecretStorage not available
     }
   }
+}
+
+/** "a, b, c, d and 3 more": a notice has to stay readable on a phone. */
+function nameList(names: string[], max = 4): string {
+  if (names.length <= max) return names.join(", ");
+  return `${names.slice(0, max).join(", ")} and ${names.length - max} more`;
 }

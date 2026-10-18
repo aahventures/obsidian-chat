@@ -52,7 +52,7 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 
 - **Where they come from**: a folder in your vault (Settings > Skills folder, default `Skills`), which syncs like any note so it works on mobile. On desktop the chat also reads `~/.claude/skills`, including the skills Claude Code syncs from your claude.ai account. A vault skill wins over a Claude Code one with the same name.
 - **Using one**: just ask, and the chat loads a skill whose description matches. Or type `/` at the start of a message to pick one; a unique prefix like `/write` works too.
-- **Getting them to your phone**: on desktop, "Copy Claude Code skills to vault" (a command, and a button in settings) copies your Claude Code skills into the skills folder. It copies only their markdown, leaves out skills that need scripts, and skips skills that already live in the vault (symlinked into `~/.claude/skills`). Files in the skills folder don't appear in the `[[` menu.
+- **Getting them to your phone**: on desktop, "Copy Claude Code skills to vault" (a command, and a button in settings) copies your Claude Code skills into the skills folder. It copies each skill's instructions and text files but not its scripts, refreshes earlier copies, and leaves alone skills that already live in the skills folder (symlinked into `~/.claude/skills`). Skill files don't appear in the `[[` menu.
 - **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
 ## Install
