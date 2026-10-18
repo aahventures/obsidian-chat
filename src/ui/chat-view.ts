@@ -2,7 +2,7 @@ import { ItemView, WorkspaceLeaf, Notice, type ViewStateResult } from "obsidian"
 import { mount, unmount } from "svelte";
 import type ChatPlugin from "../main";
 import ChatContainer from "./ChatContainer.svelte";
-import { getSkills, vaultSkillDirs } from "../skills/store";
+import { getSkills, hiddenSkillDirs } from "../skills/store";
 import type { ChatSession } from "../sessions";
 import type { SelectionScope, SessionEvent } from "../types";
 import { getModelDisplayName } from "../settings";
@@ -98,7 +98,7 @@ export class ObsidianChatView extends ItemView {
         // A function, not a value, so toggling the setting applies to open chats.
         fileLinkMenuEnabled: () => this.plugin.settings.fileLinkMenu,
         skills: () => getSkills(),
-        skillDirs: () => vaultSkillDirs(),
+        skillDirs: () => hiddenSkillDirs(this.app, this.plugin.settings.skillsFolder),
       },
     });
 

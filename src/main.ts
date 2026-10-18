@@ -643,7 +643,7 @@ export default class ChatPlugin extends Plugin {
       await this.reloadSkills();
       const lines = [
         r.copied.length > 0
-          ? `Copied ${r.copied.length} skills to ${folder}.`
+          ? `Copied ${r.copied.length} skills to ${r.folder}.`
           : "No skills to copy.",
       ];
       if (r.withoutScripts.length > 0) {

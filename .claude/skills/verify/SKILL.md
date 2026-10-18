@@ -20,7 +20,8 @@ Worked in a cloud container (Linux, no FUSE, no Obsidian account, no real API ke
 ## Drive
 - Use Playwright from `/opt/node-tools/node_modules/playwright`: `chromium.connectOverCDP("http://localhost:9333")`, then take the page whose URL starts with `app://`.
 - The first open asks "Do you trust the author of this vault?". Click "Trust author and enable plugins".
-- The custom provider needs an API key: fill the password field in the plugin's settings tab (any string works).
+- The custom provider needs an API key: fill the password field in the plugin's settings tab (any string works). Obsidian 1.9.14 has no `app.secretStorage`, so the key only lives in memory: fill it again after relaunching or after reloading the plugin (`app.plugins.disablePlugin`/`enablePlugin`), or "Open chat" just shows an API key notice.
+- To load a rebuilt `main.js` without relaunching: copy it into the plugin folder, then `await app.plugins.disablePlugin("obsidian-chat"); await app.plugins.enablePlugin("obsidian-chat")`.
 - Settings: `app.setting.open(); app.setting.openTabById("obsidian-chat")`. Close with `app.setting.close()`, because Escape inside a text field doesn't close it.
 - Chat: `app.commands.executeCommandById("obsidian-chat:open-chat")`. The input is `textarea.ochat-input`, input menu rows are `.ochat-mention-item`, and chat bubbles are `.ochat-msg`.
 - To simulate sync, write vault files with `fs` directly. Obsidian's file watcher turns that into vault events.

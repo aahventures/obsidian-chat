@@ -577,6 +577,9 @@ async function useSkill(app: App, input: Record<string, unknown>): Promise<ToolR
   if (skill.files.length > 0) {
     parts.push(`Other files in this skill (read one with use_skill and file): ${skill.files.join(", ")}`);
   }
+  if (skill.leftOut.length > 0) {
+    parts.push(`Not copied to this device, so not available: ${skill.leftOut.join(", ")}`);
+  }
   if (skill.hasScripts) {
     parts.push("This skill includes scripts, which can't run here. Follow its instructions as far as you can without them, and tell the user if a step needs one.");
   }
