@@ -48,7 +48,7 @@ export function buildSystemPrompt(): string {
   return `${STATIC_PROMPT}
 
 ## Skills
-Skills are the user's saved instructions for particular kinds of task. When a request matches a skill's description, call use_skill with its name before you respond, then follow what it says. A message that starts with "[Skill: name]" already carries the skill; don't load it again.
+Skills are the user's saved instructions for particular kinds of task. When a request matches a skill's description, call use_skill with its name before you respond, then follow what it says. A user message with a "[Skill: name]" block already carries that skill; follow it and don't load it again.
 ${index}`;
 }
 

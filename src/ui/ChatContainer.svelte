@@ -32,6 +32,8 @@
     fileLinkMenuEnabled: () => boolean;
     /** The skills a / at the start of a message offers; read live, as they reload. */
     skills: () => Array<{ name: string; description: string }>;
+    /** Files in the skills folder, which the [[ menu leaves out: they're settings, not notes. */
+    isSkillFile: (path: string) => boolean;
   }
 
   let {
@@ -47,6 +49,7 @@
     onRefreshSessions,
     fileLinkMenuEnabled,
     skills,
+    isSkillFile,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -296,7 +299,7 @@
   }
 
   function searchFiles(query: string): TFile[] {
-    const files = app.vault.getFiles();
+    const files = app.vault.getFiles().filter((f) => !isSkillFile(f.path));
     // No query yet: what you touched last is the likeliest target.
     if (!query) {
       return [...files].sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
@@ -378,16 +381,18 @@
   // what follows it. Picking one completes /name and a space; the agent loop
   // expands it into the skill's instructions when the message is sent.
 
+  /**
+   * Skills whose name contains the query, those starting with it first. Not
+   * fuzzy like the file menu: names are short, and "wr" matching
+   * google-workspace (w…r) is noise.
+   */
   function searchSkills(query: string): Array<{ name: string; description: string }> {
     const all = skills();
-    if (!query) return all;
-    const match = prepareFuzzySearch(query);
-    const scored: { skill: { name: string; description: string }; score: number }[] = [];
-    for (const skill of all) {
-      const result = match(skill.name);
-      if (result) scored.push({ skill, score: result.score });
-    }
-    return scored.sort((a, b) => b.score - a.score).map((s) => s.skill);
+    const q = query.toLowerCase();
+    if (!q) return all;
+    const hits = all.filter((k) => k.name.toLowerCase().includes(q));
+    const starts = hits.filter((k) => k.name.toLowerCase().startsWith(q));
+    return [...starts, ...hits.filter((k) => !starts.includes(k))];
   }
 
   /** Like updateMention: only typing opens the menu; moving the caret can close it. */

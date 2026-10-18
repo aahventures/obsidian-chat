@@ -365,7 +365,8 @@ export class ChatSettingTab extends PluginSettingTab {
         new Setting(containerEl)
           .setName("Copy Claude Code skills to vault")
           .setDesc(
-            "Copies ~/.claude/skills into the skills folder, so your phone gets them through sync. " +
+            "Copies your Claude Code skills into the skills folder, so your phone gets them through sync. " +
+              "Skills that need scripts are left out, since scripts can't run here. " +
               "Overwrites earlier copies; run it again after changing a skill in Claude Code or claude.ai."
           )
           .addButton((button) =>

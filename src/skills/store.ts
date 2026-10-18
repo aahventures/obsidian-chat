@@ -164,6 +164,7 @@ interface NodeModules {
     readdirSync(p: string): string[];
     readFileSync(p: string, encoding: "utf8"): string;
     readFileSync(p: string): Uint8Array;
+    realpathSync(p: string): string;
   };
   path: { join(...parts: string[]): string };
   os: { homedir(): string };
@@ -259,29 +260,64 @@ function listDiskFiles({ fs, path }: NodeModules, dir: string): string[] {
   return out.slice(0, MAX_FILES);
 }
 
+export interface CopyResult {
+  copied: string[];
+  /** Skills that need their scripts, which can't run here, so aren't worth syncing. */
+  skippedScripts: string[];
+  /** Skills whose real folder is already in the vault (symlinked into ~/.claude). */
+  skippedInVault: string[];
+}
+
 /**
- * Copy every Claude Code skill into the vault folder, so devices without
- * Claude Code (phones) get them through sync. Overwrites files of the same
- * name and leaves anything else in the folder alone. Returns how many skills
- * were copied.
+ * Copy Claude Code's skills into the vault folder, so devices without Claude
+ * Code (phones) get them through sync. Only instruction skills are copied, and
+ * only their markdown: scripts can't run here, and their files (licences,
+ * Python, assets) would turn up in the [[ menu and in searches. A skill
+ * symlinked in from the vault is already there, so it isn't copied again.
+ * Overwrites files of the same name and leaves anything else in the folder.
  */
-export async function copyClaudeSkillsToVault(app: App, folderSetting: string): Promise<number> {
+export async function copyClaudeSkillsToVault(app: App, folderSetting: string): Promise<CopyResult> {
+  const result: CopyResult = { copied: [], skippedScripts: [], skippedInVault: [] };
   const node = nodeModules();
   const folder = skillsFolderPath(folderSetting);
-  if (!node || !folder) return 0;
+  if (!node || !folder) return result;
   const adapter = app.vault.adapter;
+  const base = "getBasePath" in adapter && typeof adapter.getBasePath === "function"
+    ? realpath(node, adapter.getBasePath() as string)
+    : null;
 
-  let copied = 0;
   for (const skill of readClaudeSkills()) {
+    if (skill.hasScripts) {
+      result.skippedScripts.push(skill.name);
+      continue;
+    }
+    const real = realpath(node, skill.dir);
+    if (base && (real === base || real.startsWith(base + "/") || real.startsWith(base + "\\"))) {
+      result.skippedInVault.push(skill.name);
+      continue;
+    }
     const target = `${folder}/${skill.dir.split(/[\\/]/).pop()}`;
-    for (const rel of ["SKILL.md", ...skill.files]) {
+    for (const rel of ["SKILL.md", ...skill.files.filter((f) => /\.md$/i.test(f))]) {
       const dest = normalizePath(`${target}/${rel}`);
       const parent = dest.slice(0, dest.lastIndexOf("/"));
       if (!(await adapter.exists(parent))) await adapter.mkdir(parent);
-      const buf = node.fs.readFileSync(node.path.join(skill.dir, rel));
-      await adapter.writeBinary(dest, buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer);
+      await adapter.write(dest, node.fs.readFileSync(node.path.join(skill.dir, rel), "utf8"));
     }
-    copied++;
+    result.copied.push(skill.name);
   }
-  return copied;
+  return result;
+}
+
+function realpath(node: NodeModules, p: string): string {
+  try {
+    return node.fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/** Whether a vault path is inside the skills folder. */
+export function inSkillsFolder(path: string, folderSetting: string): boolean {
+  const folder = skillsFolderPath(folderSetting);
+  return !!folder && (path === folder || path.startsWith(folder + "/"));
 }

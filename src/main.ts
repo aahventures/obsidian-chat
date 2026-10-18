@@ -21,6 +21,7 @@ import {
   clearSkills,
   copyClaudeSkillsToVault,
   getSkills,
+  inSkillsFolder,
   loadSkills,
   skillsFolderPath,
 } from "./skills/store";
@@ -63,10 +64,10 @@ export default class ChatPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       void this.reloadSkills();
       const onVaultChange = (file: TAbstractFile, oldPath?: string) => {
-        const folder = skillsFolderPath(this.settings.skillsFolder);
-        if (!folder) return;
-        const inFolder = (p: string) => p === folder || p.startsWith(folder + "/");
-        if (inFolder(file.path) || (oldPath && inFolder(oldPath))) this.scheduleSkillReload();
+        const folder = this.settings.skillsFolder;
+        if (inSkillsFolder(file.path, folder) || (oldPath && inSkillsFolder(oldPath, folder))) {
+          this.scheduleSkillReload();
+        }
       };
       this.registerEvent(this.app.vault.on("create", onVaultChange));
       this.registerEvent(this.app.vault.on("modify", onVaultChange));
@@ -631,22 +632,30 @@ export default class ChatPlugin extends Plugin {
   scheduleSkillReload = debounce(() => void this.reloadSkills(), 1000, true);
 
   /** Copy Claude Code's skills into the skills folder, so they sync to other devices. */
-  async copyClaudeSkills(): Promise<number> {
-    if (!skillsFolderPath(this.settings.skillsFolder)) {
+  async copyClaudeSkills(): Promise<void> {
+    const folder = skillsFolderPath(this.settings.skillsFolder);
+    if (!folder) {
       new Notice("Set a skills folder first");
-      return 0;
+      return;
     }
     try {
-      const n = await copyClaudeSkillsToVault(this.app, this.settings.skillsFolder);
+      const r = await copyClaudeSkillsToVault(this.app, this.settings.skillsFolder);
       await this.reloadSkills();
-      new Notice(n > 0
-        ? `Copied ${n} skills to ${skillsFolderPath(this.settings.skillsFolder)}`
-        : "No Claude Code skills found to copy");
-      return n;
+      const lines = [
+        r.copied.length > 0
+          ? `Copied ${r.copied.length} skills to ${folder}.`
+          : "No skills to copy.",
+      ];
+      if (r.skippedScripts.length > 0) {
+        lines.push(`Skipped ${r.skippedScripts.length} that need scripts: ${r.skippedScripts.join(", ")}.`);
+      }
+      if (r.skippedInVault.length > 0) {
+        lines.push(`Already in the vault: ${r.skippedInVault.join(", ")}.`);
+      }
+      new Notice(lines.join("\n"), 8000);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       new Notice(`Couldn't copy skills: ${msg}`);
-      return 0;
     }
   }
 
