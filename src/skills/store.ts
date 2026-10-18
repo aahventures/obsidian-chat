@@ -12,8 +12,9 @@ import { App, Platform, TFile, TFolder, getFrontMatterInfo, normalizePath, parse
  *   so there this source is simply empty.
  *
  * Copies of Claude Code's skills, for phones, go in a folder of their own in
- * the skills folder (`Claude Code/`). The plugin owns it: each copy rebuilds
- * it, and nothing else in the skills folder is ever written. When names clash,
+ * the skills folder (`Claude Code/`). The plugin owns it: each copy brings it
+ * up to date (changed files written, stale ones removed), and nothing else in
+ * the skills folder is ever written. When names clash,
  * the user's own vault skills win, then the live ~/.claude ones, then copies,
  * so a copy only stands in where Claude Code isn't there.
  *
@@ -29,8 +30,10 @@ export interface Skill {
   source: "vault" | "claude" | "copy";
   /** The skill's folder: a vault path, or an absolute path on disk. */
   dir: string;
-  /** Every other file in the folder, relative to it. */
+  /** Every other file in the folder, relative to it, up to MAX_FILES. */
   files: string[];
+  /** The folder had more than MAX_FILES other files; `files` stops there. */
+  truncated: boolean;
   /** On a copy: files of the original that weren't copied (scripts, binaries). */
   leftOut: string[];
   /** Ships scripts, which can't run here. Its instructions still can be followed. */
@@ -42,8 +45,12 @@ export const COPIES_FOLDER = "Claude Code";
 /** Frontmatter key a copy's SKILL.md records its left-out files under. */
 const LEFT_OUT_KEY = "obsidian-chat-left-out";
 
-/** A skill folder holding more than this is cut short rather than walked whole. */
-const MAX_FILES = 100;
+/**
+ * A skill folder holding more files than this is cut short rather than walked
+ * whole. One cap for loading and copying, so a copy never holds files the
+ * loader can't see.
+ */
+const MAX_FILES = 1000;
 const SCRIPT_FILE = /(^|\/)scripts\/|\.(py|sh|bash|js|mjs|ts|rb|pl)$/i;
 /** What a copy carries: instructions and the text files they refer to. */
 const TEXT_FILE = /\.(md|txt|json|csv|tsv|ya?ml|toml|ini|xml|html?|css|svg|tex|rst)$/i;
@@ -106,8 +113,10 @@ function parseSkill(
   folderName: string,
   source: Skill["source"],
   dir: string,
-  files: string[]
+  listed: string[]
 ): Skill | null {
+  // Listings run one past the cap, so going over it shows.
+  const files = listed.slice(0, MAX_FILES);
   const fm = getFrontMatterInfo(raw);
   if (!fm.exists) return null;
   let meta: Record<string, unknown>;
@@ -129,6 +138,7 @@ function parseSkill(
     source,
     dir,
     files,
+    truncated: listed.length > MAX_FILES,
     leftOut,
     hasScripts: files.some((f) => SCRIPT_FILE.test(f)) || leftOut.some((f) => SCRIPT_FILE.test(f)),
   };
@@ -174,15 +184,17 @@ async function readSkillDirs(app: App, parent: string, source: Skill["source"], 
   return out;
 }
 
+/** Up to MAX_FILES + 2 files (SKILL.md, and one over the cap so it shows), relative to `dir`. */
 async function listVaultFiles(app: App, dir: string): Promise<string[]> {
+  const max = MAX_FILES + 2;
   const out: string[] = [];
   const queue = [dir];
-  while (queue.length > 0 && out.length < MAX_FILES) {
+  while (queue.length > 0 && out.length < max) {
     const listing = await app.vault.adapter.list(queue.shift()!);
     for (const f of listing.files) out.push(f.slice(dir.length + 1));
     queue.push(...listing.folders);
   }
-  return out.slice(0, MAX_FILES);
+  return out.slice(0, max);
 }
 
 // ─── ~/.claude/skills (desktop only) ────────────────────────────────────────
@@ -235,40 +247,58 @@ export function claudeSkillsDir(): string | null {
  * missing folder means no skills from it.
  */
 export function readClaudeSkills(): Skill[] {
+  return scanClaudeSkills().skills;
+}
+
+/**
+ * The skills, plus every folder that looked like a skill (or held skills) but
+ * couldn't be read or parsed. Copying uses `problems` to know when "not
+ * found" might only mean "not readable right now".
+ */
+function scanClaudeSkills(): { skills: Skill[]; problems: string[] } {
+  const result = { skills: [] as Skill[], problems: [] as string[] };
   const node = nodeModules();
   const root = claudeSkillsDir();
-  if (!node || !root) return [];
+  if (!node || !root) return result;
   const { fs, path } = node;
 
-  const out: Skill[] = [];
-  try {
-    const parents = [root];
-    const synced = path.join(root, "synced");
-    if (isDir(fs, synced)) {
+  const parents = [root];
+  const synced = path.join(root, "synced");
+  if (isDir(fs, synced)) {
+    try {
       for (const account of fs.readdirSync(synced)) {
         const p = path.join(synced, account);
         if (isDir(fs, p)) parents.push(p);
       }
+    } catch {
+      result.problems.push(synced);
     }
-    for (const parent of parents) {
-      for (const name of fs.readdirSync(parent)) {
-        const dir = path.join(parent, name);
-        const skillFile = path.join(dir, "SKILL.md");
-        // isDir follows symlinks, so a skill linked in from the vault counts.
-        if (!isDir(fs, dir) || !fs.existsSync(skillFile)) continue;
-        try {
-          const files = listDiskFiles(node, dir).filter((f) => f !== "SKILL.md");
-          const skill = parseSkill(fs.readFileSync(skillFile, "utf8"), name, "claude", dir, files);
-          if (skill) out.push(skill);
-        } catch {
-          // One unreadable skill shouldn't hide the rest.
-        }
+  }
+  for (const parent of parents) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(parent);
+    } catch {
+      result.problems.push(parent);
+      continue;
+    }
+    for (const name of names) {
+      const dir = path.join(parent, name);
+      const skillFile = path.join(dir, "SKILL.md");
+      // isDir follows symlinks, so a skill linked in from the vault counts.
+      if (!isDir(fs, dir) || !fs.existsSync(skillFile)) continue;
+      try {
+        const files = listDiskFiles(node, dir).filter((f) => f !== "SKILL.md");
+        const skill = parseSkill(fs.readFileSync(skillFile, "utf8"), name, "claude", dir, files);
+        if (skill) result.skills.push(skill);
+        else result.problems.push(dir);
+      } catch {
+        // One unreadable skill shouldn't hide the rest.
+        result.problems.push(dir);
       }
     }
-  } catch (e) {
-    console.warn("Obsidian Chat: couldn't read ~/.claude/skills", e);
   }
-  return out;
+  return result;
 }
 
 function isDir(fs: NodeModules["fs"], p: string): boolean {
@@ -279,7 +309,9 @@ function isDir(fs: NodeModules["fs"], p: string): boolean {
   }
 }
 
-function listDiskFiles({ fs, path }: NodeModules, dir: string, max = MAX_FILES): string[] {
+/** Up to MAX_FILES + 2 files (SKILL.md, and one over the cap so it shows), relative to `dir`. */
+function listDiskFiles({ fs, path }: NodeModules, dir: string): string[] {
+  const max = MAX_FILES + 2;
   const out: string[] = [];
   const queue = [""];
   while (queue.length > 0 && out.length < max) {
@@ -301,83 +333,108 @@ export interface CopyResult {
   withoutScripts: string[];
   /** Skills whose real folder is in the skills folder already (symlinked into ~/.claude). */
   alreadyThere: string[];
-  /** Skills that couldn't be read; their earlier copies, if any, are kept. */
+  /** Skills that couldn't be read or copied; any earlier copies of them are kept. */
   failed: string[];
+  /** Something in ~/.claude/skills couldn't be read, so no old copies were removed. */
+  sweepSkipped: boolean;
 }
 
-/** A skill folder bigger than this isn't copied whole; the copy says so. */
-const MAX_COPY_FILES = 1000;
-
 /**
- * Copy Claude Code's skills into `<skills folder>/Claude Code/`, so devices
- * without Claude Code (phones) get them through sync. The plugin owns that
- * folder and nothing outside it is written. Every source is read before
- * anything changes, then only files that differ are written and only copies
- * whose skill is gone are removed, so an unchanged skill causes no sync
- * traffic, a skill that fails to read keeps its earlier copy, and the folder
- * is never empty midway. Text files come across; scripts and binaries don't,
- * and the copy's SKILL.md lists what was left out.
+ * Bring `<skills folder>/Claude Code/` up to date with Claude Code's skills, so
+ * devices without Claude Code (phones) get them through sync. Nothing outside
+ * that folder is written. Each skill is read whole before its copy changes,
+ * only files that differ are written, and old copies are removed only when
+ * every skill could be read, so a skill that's unreadable for a moment keeps
+ * its copy. Text files come across; scripts and binaries don't, and the
+ * copy's SKILL.md lists what was left out.
  */
 export async function copyClaudeSkillsToVault(app: App, folderSetting: string): Promise<CopyResult> {
   const folder = skillsFolderPath(folderSetting);
   const copiesDir = `${folder}/${COPIES_FOLDER}`;
-  const result: CopyResult = { folder: copiesDir, copied: [], withoutScripts: [], alreadyThere: [], failed: [] };
+  const result: CopyResult = {
+    folder: copiesDir, copied: [], withoutScripts: [], alreadyThere: [], failed: [], sweepSkipped: false,
+  };
   const node = nodeModules();
   if (!node || !folder) return result;
   const adapter = app.vault.adapter;
-  await mkdirs(app, folder);
+  const made = new Set<string>();
+  const mkdirs = async (path: string) => {
+    if (made.has(path)) return;
+    if (!(await adapter.exists(path))) await adapter.mkdir(path);
+    made.add(path);
+  };
+  await mkdirs(folder);
+  await mkdirs(copiesDir);
   const base = "getBasePath" in adapter && typeof adapter.getBasePath === "function"
     ? (adapter.getBasePath() as string)
     : null;
-  // Resolved once the folder exists, so both sides of the comparison are real paths.
+  // Resolved once the folders exist, so both sides of the comparison are real paths.
   const skillsRoot = base ? comparablePath(realpath(node, node.path.join(base, folder))) : null;
-  const copiesRoot = skillsRoot ? `${skillsRoot}/${comparablePath(COPIES_FOLDER)}` : null;
+  const copiesRoot = base ? comparablePath(realpath(node, node.path.join(base, copiesDir))) : null;
 
+  const scan = scanClaudeSkills();
   // One copy per name, as loadSkills keys them: a later skill (an account's
   // synced one) replaces a same-named one from the top of ~/.claude/skills.
   const byName = new Map<string, Skill>();
-  for (const skill of readClaudeSkills()) byName.set(skill.name.toLowerCase(), skill);
+  for (const skill of scan.skills) byName.set(skill.name.toLowerCase(), skill);
 
-  // Read everything first. Nothing in the vault changes until this is done.
-  const planned = new Map<string, { skill: Skill; files: Map<string, string> }>();
-  /** Folders in Claude Code/ that must survive: real folders of linked skills, failed skills' copies. */
-  const keep = new Set<string>();
-  const taken = new Set<string>();
+  // A ~/.claude entry whose real folder is in Claude Code/ (linked there) must
+  // never be written over or removed, whether or not it parses as a skill.
+  const protectedDirs = new Set<string>();
+  const protect = (dir: string) => {
+    const real = comparablePath(realpath(node, dir));
+    if (copiesRoot && real.startsWith(copiesRoot + "/")) {
+      protectedDirs.add(real.slice(copiesRoot.length + 1).split("/")[0].normalize("NFC").toLowerCase());
+    }
+  };
+  for (const dir of scan.problems) protect(dir);
+  for (const skill of scan.skills) protect(skill.dir); // losers of a name clash too
+
+  // Skills linked in from the skills folder are your own, loaded from there.
+  const toCopy: Skill[] = [];
   for (const skill of byName.values()) {
-    const target = uniqueFolderName(skill.name, taken);
     const real = comparablePath(realpath(node, skill.dir));
-    if (skillsRoot && real.startsWith(skillsRoot + "/")) {
-      // Linked in from the skills folder: one of your own, loaded from there.
-      // If it lives in Claude Code/ itself, removing stale copies mustn't delete it.
-      result.alreadyThere.push(skill.name);
-      if (copiesRoot && real.startsWith(copiesRoot + "/")) keep.add(real.slice(copiesRoot.length + 1).split("/")[0]);
-      continue;
-    }
-    try {
-      // One past the cap, plus SKILL.md, so going over it shows.
-      const all = listDiskFiles(node, skill.dir, MAX_COPY_FILES + 2).filter((f) => f !== "SKILL.md");
-      const kept = all.filter((f) => TEXT_FILE.test(f) && !SCRIPT_FILE.test(f)).slice(0, MAX_COPY_FILES);
-      const leftOut = all.filter((f) => !kept.includes(f));
-      if (all.length > MAX_COPY_FILES) leftOut.push(`(more files past the first ${MAX_COPY_FILES})`);
-      const files = new Map<string, string>();
-      files.set("SKILL.md", withLeftOut(node.fs.readFileSync(node.path.join(skill.dir, "SKILL.md"), "utf8"), leftOut));
-      for (const rel of kept) files.set(rel, node.fs.readFileSync(node.path.join(skill.dir, rel), "utf8"));
-      planned.set(target, { skill, files });
-      if (skill.hasScripts || leftOut.some((f) => SCRIPT_FILE.test(f))) result.withoutScripts.push(skill.name);
-    } catch {
-      result.failed.push(skill.name);
-      keep.add(target);
-    }
+    if (skillsRoot && real.startsWith(skillsRoot + "/")) result.alreadyThere.push(skill.name);
+    else toCopy.push(skill);
   }
 
-  // Write what changed.
-  await mkdirs(app, copiesDir);
-  for (const [target, { skill, files }] of planned) {
+  const live = new Set<string>(protectedDirs);
+  for (const skill of toCopy) {
+    const target = copyFolderName(skill.name);
+    live.add(target);
+    if (protectedDirs.has(target)) {
+      result.failed.push(skill.name);
+      continue;
+    }
+    // Read the whole skill before its copy changes.
+    let files: Map<string, string>;
+    const leftOut: string[] = [];
+    try {
+      const raw = node.fs.readFileSync(node.path.join(skill.dir, "SKILL.md"), "utf8");
+      files = new Map();
+      for (const rel of skill.files) {
+        if (!TEXT_FILE.test(rel) || SCRIPT_FILE.test(rel)) {
+          leftOut.push(rel);
+          continue;
+        }
+        try {
+          files.set(normalizePath(rel), node.fs.readFileSync(node.path.join(skill.dir, rel), "utf8"));
+        } catch {
+          leftOut.push(rel); // one unreadable reference shouldn't sink the skill
+        }
+      }
+      if (skill.truncated) leftOut.push(`(more files past the first ${MAX_FILES})`);
+      files.set("SKILL.md", withLeftOut(raw, leftOut));
+    } catch {
+      result.failed.push(skill.name);
+      continue;
+    }
+
     const dir = `${copiesDir}/${target}`;
     for (const [rel, content] of files) {
-      const dest = normalizePath(`${dir}/${rel}`);
-      if ((await adapter.exists(dest)) && (await adapter.read(dest)) === content) continue;
-      await mkdirs(app, dest.slice(0, dest.lastIndexOf("/")));
+      const dest = `${dir}/${rel}`;
+      if (await sameContent(app, dest, content)) continue;
+      await mkdirs(dest.slice(0, dest.lastIndexOf("/")));
       await adapter.write(dest, content);
     }
     // Files an earlier copy had that this one doesn't.
@@ -385,33 +442,47 @@ export async function copyClaudeSkillsToVault(app: App, folderSetting: string): 
       if (!files.has(rel)) await adapter.remove(`${dir}/${rel}`);
     }
     result.copied.push(skill.name);
+    if (skill.hasScripts || leftOut.some((f) => SCRIPT_FILE.test(f))) result.withoutScripts.push(skill.name);
   }
 
-  // Remove copies whose skill is gone. Only ever inside Claude Code/.
+  // Remove copies whose skill is gone, but only when every skill could be
+  // read: one that's unreadable for a moment would otherwise lose its copy.
+  if (scan.problems.length > 0) {
+    result.sweepSkipped = true;
+    return result;
+  }
   const listing = await adapter.list(copiesDir);
   for (const dir of listing.folders) {
-    const name = dir.slice(copiesDir.length + 1);
-    if (!planned.has(name) && !keep.has(comparablePath(name)) && !keep.has(name)) await adapter.rmdir(dir, true);
+    const name = dir.slice(copiesDir.length + 1).normalize("NFC").toLowerCase();
+    if (!live.has(name)) await adapter.rmdir(dir, true);
   }
   for (const file of listing.files) await adapter.remove(file);
   return result;
 }
 
 /**
- * A folder name for a copy that stays inside Claude Code/, syncs (no leading
- * dot), works on every OS, and isn't taken by another copy (compared without
- * case, as macOS and Windows would).
+ * A copy's folder name: the skill name, lowercased, with anything that could
+ * break a path or sync %-escaped (separators, reserved characters, a leading
+ * dot, a trailing dot or space). Fixed for a given name and never shared by
+ * two names, so a copy always lands in the same folder, whatever the case
+ * rules of the disk or the order skills are found in.
  */
-function uniqueFolderName(name: string, taken: Set<string>): string {
-  let slug = name
-    .replace(/[\\/:*?"<>|\x00-\x1f]/g, "-")
-    .replace(/^[.\s]+|[.\s]+$/g, "")
-    .trim();
-  if (!slug) slug = "skill";
-  let candidate = slug;
-  for (let i = 2; taken.has(candidate.toLowerCase()); i++) candidate = `${slug}-${i}`;
-  taken.add(candidate.toLowerCase());
-  return candidate;
+function copyFolderName(name: string): string {
+  const esc = (c: string) => "%" + c.charCodeAt(0).toString(16).padStart(2, "0");
+  return name
+    .normalize("NFC")
+    .toLowerCase()
+    .replace(/[\\/:*?"<>|%\x00-\x1f]/g, esc)
+    .replace(/^\./, esc)
+    .replace(/[. ]$/, esc);
+}
+
+/** Whether a vault file already holds `content`. Compares sizes first, so a changed file isn't read. */
+async function sameContent(app: App, path: string, content: string): Promise<boolean> {
+  const stat = await app.vault.adapter.stat(path);
+  if (!stat || stat.type !== "file") return false;
+  if (stat.size !== new TextEncoder().encode(content).length) return false;
+  return (await app.vault.adapter.read(path)) === content;
 }
 
 /** Record left-out files in a copy's frontmatter, so use_skill can say so. */
@@ -419,20 +490,20 @@ function withLeftOut(raw: string, leftOut: string[]): string {
   const fm = getFrontMatterInfo(raw);
   if (!fm.exists) return raw;
   // `to` can sit just before or just after the newline ending the last line.
-  // A key already there (a copy that came back round) is replaced, not doubled.
-  const head = raw
-    .slice(0, fm.to)
-    .replace(/\r?\n$/, "")
-    .split(/\r?\n/)
-    .filter((line) => !line.startsWith(`${LEFT_OUT_KEY}:`))
-    .join("\n");
+  // A key already there (a copy that came back round) is replaced, not
+  // doubled, along with any block-list lines under it.
+  const lines = raw.slice(0, fm.to).replace(/\r?\n$/, "").split(/\r?\n/);
+  const kept: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (!lines[i].startsWith(`${LEFT_OUT_KEY}:`)) {
+      kept.push(lines[i]);
+      continue;
+    }
+    while (i + 1 < lines.length && /^(\s|-\s|-$)/.test(lines[i + 1])) i++;
+  }
   const tail = raw.slice(fm.to).replace(/^\r?\n/, "");
-  if (leftOut.length === 0) return `${head}\n${tail}`;
-  return `${head}\n${LEFT_OUT_KEY}: ${JSON.stringify(leftOut)}\n${tail}`;
-}
-
-async function mkdirs(app: App, path: string): Promise<void> {
-  if (!(await app.vault.adapter.exists(path))) await app.vault.adapter.mkdir(path);
+  if (leftOut.length > 0) kept.push(`${LEFT_OUT_KEY}: ${JSON.stringify(leftOut)}`);
+  return `${kept.join("\n")}\n${tail}`;
 }
 
 function realpath(node: NodeModules, p: string): string {

@@ -653,7 +653,10 @@ export default class ChatPlugin extends Plugin {
         lines.push(`Already in ${folder}: ${nameList(r.alreadyThere)}.`);
       }
       if (r.failed.length > 0) {
-        lines.push(`Couldn't read ${nameList(r.failed)}, so kept the copies from last time.`);
+        lines.push(`Couldn't copy ${nameList(r.failed)}; any earlier copies were kept.`);
+      }
+      if (r.sweepSkipped) {
+        lines.push("Some skills in ~/.claude couldn't be read, so no old copies were removed.");
       }
       new Notice(lines.join("\n"), 8000);
     } catch (e) {
