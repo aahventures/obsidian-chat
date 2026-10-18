@@ -52,8 +52,8 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 
 - **Where they come from**: a folder in your vault (Settings > Skills folder, default `Skills`), which syncs like any note so it works on mobile. On desktop the chat also reads `~/.claude/skills`, including the skills Claude Code syncs from your claude.ai account.
 - **Using one**: just ask, and the chat loads a skill whose description matches. Or type `/` at the start of a message to pick one; a unique prefix like `/write` works too.
-- **Getting them to your phone**: on desktop, "Copy Claude Code skills to vault" (a command, and a button in settings) copies your Claude Code skills into `<skills folder>/Claude Code/`. The plugin owns that folder and rebuilds it on every copy, so don't edit files in it; change the skill in Claude Code or claude.ai and copy again, or move it out to make it your own. Scripts and binaries are left out.
-- **When names clash**: your own vault skills win, then Claude Code's on desktop, then the copies.
+- **Getting Claude Code's skills to your phone**: on desktop, "Sync Claude Code skills to other devices" (a command, and a button in settings) saves them to `skills.json` in the plugin's folder, which syncs along with the plugin. Run it again after changing a skill. Scripts, binaries and very large files are left out. With Obsidian Sync, turn on syncing of installed community plugins.
+- **When names clash**: your own vault skills win, then Claude Code's on desktop, then the synced ones.
 - **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
 ## Install
@@ -91,7 +91,7 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 | Copy conversation transcript | Export the active session's conversation to clipboard |
 | Clear conversation | Empty the active session (keeps the session) |
 | Reload skills | Re-read the skills folder and `~/.claude/skills` |
-| Copy Claude Code skills to vault | Desktop: copy `~/.claude/skills` into the skills folder |
+| Sync Claude Code skills to other devices | Desktop: save `~/.claude/skills` for your phone |
 
 ## Chat sessions
 

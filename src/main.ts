@@ -19,11 +19,11 @@ import { SessionSwitcherModal } from "./ui/session-switcher";
 import {
   claudeSkillsDir,
   clearSkills,
-  copyClaudeSkillsToVault,
   getSkills,
   inSkillsFolder,
   loadSkills,
-  skillsFolderPath,
+  snapshotMtime,
+  writeSnapshot,
 } from "./skills/store";
 
 const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
@@ -73,6 +73,12 @@ export default class ChatPlugin extends Plugin {
       this.registerEvent(this.app.vault.on("modify", onVaultChange));
       this.registerEvent(this.app.vault.on("delete", onVaultChange));
       this.registerEvent(this.app.vault.on("rename", onVaultChange));
+      // The snapshot lives in the plugin folder, which raises no vault events,
+      // so a copy synced in from another device is noticed by its mtime: on
+      // focus (back to the app on a phone) and once a minute.
+      const checkSnapshot = () => void this.reloadSkillsIfSnapshotChanged();
+      this.registerDomEvent(window, "focus", checkSnapshot);
+      this.registerInterval(window.setInterval(checkSnapshot, 60_000));
     });
 
     // Register sidebar view (loads deferred by default in v1.7.2+)
@@ -157,12 +163,12 @@ export default class ChatPlugin extends Plugin {
     });
 
     this.addCommand({
-      id: "copy-claude-skills",
-      name: "Copy Claude Code skills to vault",
-      // Desktop with Claude Code only; mobile has no ~/.claude to copy from.
+      id: "sync-claude-skills",
+      name: "Sync Claude Code skills to other devices",
+      // Desktop with Claude Code only; mobile has no ~/.claude to read.
       checkCallback: (checking) => {
-        if (!claudeSkillsDir() || !skillsFolderPath(this.settings.skillsFolder)) return false;
-        if (!checking) void this.copyClaudeSkills();
+        if (!claudeSkillsDir()) return false;
+        if (!checking) void this.syncClaudeSkills();
         return true;
       },
     });
@@ -624,44 +630,48 @@ export default class ChatPlugin extends Plugin {
 
   // ─── Skills ──────────────────────────────────────────────────────────
 
-  reloadSkills(): Promise<void> {
-    return loadSkills(this.app, this.settings.skillsFolder, this.settings.claudeSkills);
+  /** Claude Code's skills, saved for devices without Claude Code. Syncs with the plugin folder. */
+  get skillsSnapshotPath(): string {
+    return `${this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`}/skills.json`;
+  }
+
+  private snapshotSeen = 0;
+
+  async reloadSkills(): Promise<void> {
+    this.snapshotSeen = await snapshotMtime(this.app, this.skillsSnapshotPath);
+    await loadSkills(this.app, this.settings.skillsFolder, this.settings.claudeSkills, this.skillsSnapshotPath);
+  }
+
+  private async reloadSkillsIfSnapshotChanged(): Promise<void> {
+    if ((await snapshotMtime(this.app, this.skillsSnapshotPath)) !== this.snapshotSeen) await this.reloadSkills();
   }
 
   /** Bursts of changes (a sync bringing in a whole skill) become one reload. */
   scheduleSkillReload = debounce(() => void this.reloadSkills(), 1000, true);
 
-  /** Copy Claude Code's skills into the skills folder, so they sync to other devices. */
-  async copyClaudeSkills(): Promise<void> {
-    const folder = skillsFolderPath(this.settings.skillsFolder);
-    if (!folder) {
-      new Notice("Set a skills folder first");
-      return;
-    }
+  /** Save Claude Code's skills to the snapshot, so they sync to other devices. */
+  async syncClaudeSkills(): Promise<void> {
     try {
-      const r = await copyClaudeSkillsToVault(this.app, this.settings.skillsFolder);
+      const r = await writeSnapshot(this.app, this.skillsSnapshotPath);
       await this.reloadSkills();
       const lines = [
-        r.copied.length > 0
-          ? `Copied ${r.copied.length} skills to ${r.folder}.`
-          : "No skills to copy.",
+        r.saved.length > 0
+          ? `Saved ${r.saved.length} skills for your other devices.`
+          : "No Claude Code skills found.",
       ];
       if (r.withoutScripts.length > 0) {
-        lines.push(`Scripts left out, as they can't run here: ${nameList(r.withoutScripts)}.`);
+        lines.push(`Scripts left out, as they can't run there: ${nameList(r.withoutScripts)}.`);
       }
-      if (r.alreadyThere.length > 0) {
-        lines.push(`Already in ${folder}: ${nameList(r.alreadyThere)}.`);
+      if (r.notSkills.length > 0) {
+        lines.push(`Skipped, no description in SKILL.md: ${nameList(r.notSkills)}.`);
       }
-      if (r.failed.length > 0) {
-        lines.push(`Couldn't copy ${nameList(r.failed)}; any earlier copies were kept.`);
-      }
-      if (r.sweepSkipped) {
-        lines.push("Some skills in ~/.claude couldn't be read, so no old copies were removed.");
+      if (r.keptFromLast.length > 0) {
+        lines.push(`Part of ~/.claude couldn't be read, so these were kept from last time: ${nameList(r.keptFromLast)}.`);
       }
       new Notice(lines.join("\n"), 8000);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      new Notice(`Couldn't copy skills: ${msg}`);
+      new Notice(`Couldn't save skills: ${msg}`);
     }
   }
 

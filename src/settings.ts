@@ -363,19 +363,18 @@ export class ChatSettingTab extends PluginSettingTab {
 
       if (hasClaude) {
         new Setting(containerEl)
-          .setName("Copy Claude Code skills to vault")
+          .setName("Sync Claude Code skills to other devices")
           .setDesc(
-            `Copies your Claude Code skills into a "Claude Code" folder inside the skills folder, so your phone gets them through sync. ` +
-              "Scripts are left out, since they can't run here. " +
-              "Each copy replaces that folder, so don't edit files in it: change the skill in Claude Code or claude.ai and copy again, " +
-              "or move it out of that folder to make it your own."
+            "Saves your Claude Code skills (including the ones from claude.ai) into the plugin's folder, " +
+              "which syncs along with the plugin, so your phone can use them too. Scripts are left out, since they can't run there. " +
+              "Run it again after changing a skill in Claude Code or claude.ai. To edit a skill yourself, put it in the skills folder instead."
           )
           .addButton((button) =>
             button
-              .setButtonText("Copy")
+              .setButtonText("Sync")
               .onClick(async () => {
                 button.setDisabled(true);
-                await this.plugin.copyClaudeSkills();
+                await this.plugin.syncClaudeSkills();
                 loadedSetting?.setDesc(summary());
                 button.setDisabled(false);
               })
