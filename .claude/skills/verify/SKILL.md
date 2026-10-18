@@ -7,6 +7,8 @@ description: Run the plugin inside real Obsidian (headless, under xvfb) against 
 
 Worked in a cloud container (Linux, no FUSE, no Obsidian account, no real API key) with Obsidian 1.13.7.
 
+**Needs:** Linux x86_64 (the AppImage), `xvfb-run`, Node, and Playwright with a Chromium. Claude Code's cloud containers have all of these; Playwright is at `/opt/node-tools/node_modules/playwright`. Anywhere else, install it into a scratch folder (`npm i playwright` there) and import it from there; it connects to Obsidian's own Chromium over CDP, so no browser download is needed. On macOS or Windows, launching the installed Obsidian with `--remote-debugging-port=9333` (a standard Electron flag) instead of steps 2 and 5, without xvfb, should work, but is untested.
+
 ## Setup
 1. `npm ci && npm run build` (produces `main.js`).
 2. Download Obsidian: `curl -L -o Obsidian.AppImage https://github.com/obsidianmd/obsidian-releases/releases/download/v1.13.7/Obsidian-1.13.7.AppImage`.
@@ -14,11 +16,11 @@ Worked in a cloud container (Linux, no FUSE, no Obsidian account, no real API ke
 3. Use an isolated `HOME`, so Obsidian's config and anything the plugin reads from `~` are test copies:
    - `$HOME/.config/obsidian/obsidian.json`: `{"vaults":{"testvault0001":{"path":"<vault>","ts":<ms>,"open":true}}}`
    - In the vault: `.obsidian/community-plugins.json` = `["obsidian-chat"]`, the plugin files (`main.js`, `manifest.json`, `styles.css`) in `.obsidian/plugins/obsidian-chat/`, and a `data.json` with `{"provider":"custom","baseUrl":"http://127.0.0.1:8765","model":"mock"}`.
-4. Mock model: `node .claude/skills/verify/mock-model.js <requests-dir>` (from the repo). It answers the custom provider's `POST /v1/chat/completions` and saves each request body as `<requests-dir>/req-<n>.json`, which shows the exact system prompt, tools and messages the plugin sent. A message containing `call:<tool> <json args>` (e.g. `call:read_document {"path":"Notes/a.md"}`) makes it return that tool call; see the file's header.
+4. Mock model: `node .claude/skills/verify/mock-model.js <requests-dir>` (from the repo). It answers the custom provider's `POST /v1/chat/completions` and saves each request body as `<requests-dir>/req-<n>.json`, which shows the exact system prompt, tools and messages the plugin sent. Other routes get a 404 and aren't counted. To script tool calls, put lines starting with `call:<tool> <json args>` in a chat message (e.g. `call:read_document {"path":"Notes/a.md"}`); several lines are returned one per round, so multi-step tool use can be tested. See the file's header. In the chat input, Shift+Enter starts a new line.
 5. Launch: `HOME=<home> xvfb-run -a -s "-screen 0 1280x900x24" ./squashfs-root/obsidian --no-sandbox --disable-gpu --remote-debugging-port=9333 &`, then wait until `curl -s localhost:9333/json/list` lists an `app://` page.
 
 ## Drive
-- Use Playwright from `/opt/node-tools/node_modules/playwright`: `chromium.connectOverCDP("http://localhost:9333")`, then take the page whose URL starts with `app://`.
+- With Playwright (see **Needs**): `chromium.connectOverCDP("http://localhost:9333")`, then take the page whose URL starts with `app://`.
 - The first open asks "Do you trust the author of this vault?". Click "Trust author and enable plugins".
 - Settings: `app.setting.open(); app.setting.openTabById("obsidian-chat")`, run in the main page. In 1.13 Settings opens in **its own window**: a second CDP page (URL `about:blank`, title "Settings - …"). Find it with `context.pages()` and drive the settings UI there. Close it with `app.setting.close()` from the main page.
 - The custom provider needs an API key: fill the password field in the plugin's settings tab (any string works). It's kept in `app.secretStorage`, so it survives plugin reloads.
