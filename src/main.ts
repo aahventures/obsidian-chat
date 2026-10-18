@@ -652,6 +652,9 @@ export default class ChatPlugin extends Plugin {
       if (r.alreadyThere.length > 0) {
         lines.push(`Already in ${folder}: ${nameList(r.alreadyThere)}.`);
       }
+      if (r.failed.length > 0) {
+        lines.push(`Couldn't read ${nameList(r.failed)}, so kept the copies from last time.`);
+      }
       new Notice(lines.join("\n"), 8000);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
