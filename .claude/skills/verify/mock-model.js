@@ -4,9 +4,12 @@
 //
 // Answers POST /v1/chat/completions and saves each request body as
 // <requests-dir>/req-<n>.json, so a test can see exactly what the plugin sent
-// (system prompt, tools, messages). Point the plugin's custom provider at
-// http://127.0.0.1:<port> (default 8765). Every other route gets a 404, and
-// isn't saved or counted, so it can't shift the numbering.
+// (system prompt, tools, messages). req-*.json files left from an earlier run
+// are removed at startup, so every file there is from this run. Point the
+// plugin's custom provider at http://127.0.0.1:<port> (default 8765). Every
+// other route gets a 404, and a body that isn't JSON with a messages array
+// gets a 400, as a real server would; neither is counted, so they can't
+// shift the numbering (a 400's body is still saved, as req-bad-<k>.json).
 //
 // Scripting tool calls: put one or more lines in your chat message that start
 // with `call:<tool> <json args>`, e.g.
@@ -31,8 +34,12 @@ if (!dir) {
   process.exit(1);
 }
 fs.mkdirSync(dir, { recursive: true });
+for (const f of fs.readdirSync(dir)) {
+  if (/^req-.*\.json$/.test(f)) fs.rmSync(path.join(dir, f));
+}
 
-const CALL_LINE = /^call:(\w+)[ \t]*(\{.*\})?[ \t]*$/gm;
+// `\r?` so a message with Windows line endings still scripts calls.
+const CALL_LINE = /^call:(\w+)[ \t]*(\{.*\})?[ \t]*\r?$/gm;
 
 /** The scripted calls in a user message, in order. */
 function scriptedCalls(text) {
@@ -66,40 +73,49 @@ function reply(messages, n) {
 }
 
 let n = 0;
-http
-  .createServer((req, res) => {
+let bad = 0;
+
+function send(res, status, payload) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify(payload));
+}
+
+const server = http.createServer((req, res) => {
+    // A client that drops mid-request (Obsidian relaunched or a plugin
+    // reload) must not take the server down with an unhandled 'error'.
+    req.on("error", (e) => console.error(`request error: ${e.message}`));
+    res.on("error", (e) => console.error(`response error: ${e.message}`));
+    // Decode as a stream, so a multi-byte character split across chunks survives.
+    req.setEncoding("utf8");
     let raw = "";
     req.on("data", (c) => (raw += c));
     req.on("end", () => {
       try {
         if (req.method !== "POST" || !req.url.startsWith("/v1/chat/completions")) {
           console.log(`404 ${req.method} ${req.url}`);
-          res.writeHead(404, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: { message: `mock-model only serves POST /v1/chat/completions` } }));
+          send(res, 404, { error: { message: "mock-model only serves POST /v1/chat/completions" } });
           return;
         }
-        n++;
         let body = null;
         try {
           body = JSON.parse(raw);
         } catch {
-          // Saved as sent below: a malformed request is itself worth seeing.
+          // Answered with a 400 below, and saved as sent: it's worth seeing.
         }
-        try {
-          const saved = body !== null && typeof body === "object" ? JSON.stringify(body, null, 2) : raw;
-          fs.writeFileSync(path.join(dir, `req-${n}.json`), saved);
-        } catch (e) {
-          console.error(`couldn't save request ${n}: ${e.message}`);
+        if (!Array.isArray(body?.messages)) {
+          bad++;
+          save(`req-bad-${bad}.json`, raw);
+          console.error(`400: request body isn't JSON with a messages array (saved as req-bad-${bad}.json)`);
+          send(res, 400, { error: { message: "request body must be JSON with a messages array" } });
+          return;
         }
-        const messages = Array.isArray(body?.messages) ? body.messages : [];
-        const message = reply(messages, n);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(
-          JSON.stringify({
-            choices: [{ message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
-            usage: { prompt_tokens: 1, completion_tokens: 1 },
-          })
-        );
+        n++;
+        save(`req-${n}.json`, JSON.stringify(body, null, 2));
+        const message = reply(body.messages, n);
+        send(res, 200, {
+          choices: [{ message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        });
       } catch (e) {
         // Never let one odd request take the server down mid-test.
         console.error(`error handling request: ${e.stack || e}`);
@@ -107,5 +123,24 @@ http
         res.end(JSON.stringify({ error: { message: String(e) } }));
       }
     });
-  })
-  .listen(port, "127.0.0.1", () => console.log(`mock model on http://127.0.0.1:${port}, saving requests to ${dir}`));
+  });
+
+function save(name, content) {
+  try {
+    fs.writeFileSync(path.join(dir, name), content);
+  } catch (e) {
+    console.error(`couldn't save ${name}: ${e.message}`);
+  }
+}
+
+// Say so plainly if the port is taken: started in the background, an old mock
+// would otherwise keep answering while this one has quietly exited.
+server.on("error", (e) => {
+  console.error(
+    e.code === "EADDRINUSE"
+      ? `port ${port} is already in use (an earlier mock still running?); stop it or pass another port`
+      : `server error: ${e.message}`
+  );
+  process.exit(1);
+});
+server.listen(port, "127.0.0.1", () => console.log(`mock model on http://127.0.0.1:${port}, saving requests to ${dir}`));
