@@ -11,3 +11,7 @@ chat-state.json
 
 # Clawpatch local review state
 .clawpatch/
+
+# Obsidian downloaded by the verify skill, if it's fetched inside the repo
+Obsidian.AppImage
+squashfs-root/
