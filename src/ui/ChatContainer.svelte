@@ -4,6 +4,7 @@
   import { Keymap, MarkdownRenderer, Notice, prepareFuzzySearch } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
   import { lineDiff } from "../util/diff";
+  import { excludedFileFilter } from "../util/excluded";
 
   interface ChatMessage {
     id: number;
@@ -267,10 +268,14 @@
   }
 
   function searchFiles(query: string): TFile[] {
-    const files = app.vault.getFiles();
+    // Leave out what the user excluded in Files and links, as Obsidian's own
+    // [[ suggestions do. Read per search so edits to the setting apply at once.
+    // Only the menu: a link typed by hand still works.
+    const isExcluded = excludedFileFilter(app);
+    const files = app.vault.getFiles().filter((file) => !isExcluded(file.path));
     // No query yet: what you touched last is the likeliest target.
     if (!query) {
-      return [...files].sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
+      return files.sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
     }
     // Same matcher as the Quick Switcher, run over the full path so
     // "src/agent/" narrows by folder too and spaces match separate words.
