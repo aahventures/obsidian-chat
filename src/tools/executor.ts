@@ -1,6 +1,7 @@
 import { App, TFile, normalizePath } from "obsidian";
 import type { ToolResult } from "../types";
 import { TOOL_DEFINITIONS } from "./registry";
+import { findSkill, listSkill, readSkillBody, readSkillFile, relPath, sameKey, scanSkills, type Skill, type SkippedSkill } from "../skills/store";
 
 type AskUserCallback = (question: string) => Promise<string>;
 
@@ -34,7 +35,9 @@ export async function executeTool(
   app: App,
   toolName: string,
   input: Record<string, unknown>,
-  onAskUser: AskUserCallback
+  onAskUser: AskUserCallback,
+  /** The skills folder setting, for use_skill. */
+  skillsFolder = ""
 ): Promise<ToolResult> {
   try {
     const missing = missingRequiredParams(toolName, input);
@@ -73,6 +76,8 @@ export async function executeTool(
         return await openDocument(app, input);
       case "ask_user":
         return await askUser(input, onAskUser);
+      case "use_skill":
+        return await useSkill(app, input, skillsFolder);
       default:
         return { result: `Unknown tool: ${toolName}`, isError: true };
     }
@@ -553,4 +558,50 @@ async function askUser(
 
   const answer = await onAskUser(question);
   return { result: answer, isError: false };
+}
+
+// ─── use_skill ──────────────────────────────────────────────────────────────
+
+async function useSkill(app: App, input: Record<string, unknown>, skillsFolder: string): Promise<ToolResult> {
+  const name = String(input.name ?? "");
+  const { skills, skipped } = await scanSkills(app, skillsFolder);
+  const skill = findSkill(skills, name);
+  if (!skill) return { result: `No skill named '${name}'. ${unknownSkillHint(name, skills, skipped)}`, isError: true };
+
+  if (typeof input.file === "string" && input.file.trim()) {
+    const read = await readSkillFile(app, skill, input.file);
+    if ("error" in read) return { result: read.error, isError: true };
+    return { result: read.content, isError: false, path: read.file.path, label: `${skill.name}/${relPath(skill, read.file)}` };
+  }
+
+  const { files, truncated } = listSkill(skill);
+  // A draft can be frontmatter only: say so, rather than hand back nothing.
+  const parts = [(await readSkillBody(app, skill)) || "(This skill has no instructions beyond its description.)"];
+  if (files.length > 0) {
+    // One per line: a file name can hold a comma.
+    parts.push(`Other files in this skill (read one with use_skill and file):\n${files.join("\n")}`);
+  }
+  if (truncated) parts.push(`This skill has more files; only the first ${files.length} are listed.`);
+  return { result: parts.join("\n\n"), isError: false, path: skill.file.path, label: skill.name };
+}
+
+/**
+ * When no skill has that name: why, if that skill was skipped (so the user can
+ * fix it); else the closest few, as the system prompt's list can be cut short.
+ */
+function unknownSkillHint(name: string, skills: Skill[], skipped: SkippedSkill[]): string {
+  const q = sameKey(name.trim());
+  const broken = skipped.find((k) => sameKey(k.name) === q);
+  if (broken) return `The skill in ${broken.folder} can't be used: ${broken.reason}. Tell the user, so they can fix it.`;
+  if (skills.length === 0) return "The user has no skills that can be used.";
+  const words = q.split(/[^\p{L}\p{N}\p{M}]+/u).filter((w) => w.length > 1);
+  const closest = skills
+    .map((s) => {
+      const text = sameKey(`${s.name} ${s.description}`);
+      return { s, score: words.filter((w) => text.includes(w)).length };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((x) => `- ${x.s.name}: ${x.s.description}`);
+  return `Some of the user's ${skills.length} skills, closest first:\n${closest.join("\n")}`;
 }

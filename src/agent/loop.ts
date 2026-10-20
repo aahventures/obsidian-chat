@@ -13,6 +13,7 @@ import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
+import { getSkills } from "../skills/store";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -81,6 +82,8 @@ export class AgentLoop {
    * that: the next run() or clear() reset it and revived the stopped run.)
    */
   private generation = 0;
+  /** The system prompt the last turn was sent with, for the transcript. */
+  private lastSystemPrompt = "";
   /**
    * OpenAI Responses API chaining state, owned per loop so that concurrent
    * sessions never chain onto each other's conversation. See
@@ -102,6 +105,7 @@ export class AgentLoop {
   clear(): void {
     this.generation++;
     this.messages = [];
+    this.lastSystemPrompt = "";
     clearOpenAIState(this.openaiState);
   }
 
@@ -142,7 +146,8 @@ export class AgentLoop {
 
   /** Export the full conversation as a readable markdown transcript */
   exportTranscript(): string {
-    const systemPrompt = buildSystemPrompt();
+    // The prompt the last turn went out with (skills change it), else the plain one.
+    const systemPrompt = this.lastSystemPrompt || buildSystemPrompt();
 
     const parts: string[] = [
       `# Obsidian Chat Transcript`,
@@ -233,8 +238,22 @@ export class AgentLoop {
     const dropped = this.pruneHistory();
     if (dropped > 0 && this.sendsFullHistory) callbacks.onTrim?.(dropped);
 
-    // System prompt is static (cache-friendly). Built once, identical every call.
-    const systemPrompt = buildSystemPrompt();
+    // Built once per turn, identical every call within it (cache-friendly). It
+    // only changes between turns when skills do.
+    // A scan that fails outright (each unreadable skill is already skipped on
+    // its own) mustn't stop the turn: it goes without skills. It reads files,
+    // so the turn shows it's started first.
+    callbacks.onThinking();
+    // Taken once, so the index and every use_skill this turn read the same folder
+    // even if the setting is edited meanwhile.
+    const skillsFolder = this.settings.skillsFolder;
+    const skills = await getSkills(this.app, skillsFolder).catch((e) => {
+      console.warn("Obsidian Chat: couldn't read skills", e);
+      return [];
+    });
+    if (stopped()) return;
+    const systemPrompt = buildSystemPrompt(skills);
+    this.lastSystemPrompt = systemPrompt;
 
     debugLog(this.app, "USER_MESSAGE", { userMessage, hasSelection: !!selection });
 
@@ -243,7 +262,8 @@ export class AgentLoop {
     for (let i = 0; i < maxIterations; i++) {
       if (stopped()) return;
 
-      callbacks.onThinking();
+      // The first round's was sent before the skills scan.
+      if (i > 0) callbacks.onThinking();
 
       let response;
       try {
@@ -315,7 +335,8 @@ export class AgentLoop {
           this.app,
           tc.name!,
           tc.input!,
-          callbacks.onAskUser
+          callbacks.onAskUser,
+          skillsFolder
         );
         if (stopped()) return;
 
