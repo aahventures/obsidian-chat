@@ -41,13 +41,15 @@ src/
     chat-view.ts         # ItemView: one pane onto one session
     ChatContainer.svelte # All chat UI: messages, input, selection pill
     session-switcher.ts  # "Switch chat" picker (SuggestModal), beside the header dropdown
+  skills/
+    store.ts             # Reads skills from the vault's skills folder, on demand
   util/
     diff.ts              # Line diff for find_replace results
 ```
 
 ## Key Patterns
 
-- **KV cache optimization**: System prompt is static (never includes dynamic context). Dynamic context (active file, selection) goes in the user message after the cached prefix.
+- **KV cache optimization**: System prompt is static (never includes per-turn context; the one addition is the skills index, which only changes when skills do). Dynamic context (active file, selection) goes in the user message after the cached prefix.
 - **Anthropic `cache_control`**: Breakpoints on system prompt and last tool definition.
 - **Per-provider API keys**: Stored as `ochat-api-key-anthropic` / `ochat-api-key-openai` in `SecretStorage`.
 - **Sessions**: `SessionStore` (on the plugin) owns every conversation and runs their turns. Each `ChatSession` has its own `AgentLoop` and OpenAI chain state, so conversations can't bleed into each other.
@@ -58,6 +60,7 @@ src/
 - **Chat persistence**: `chat-state.json` in the plugin folder, which syncs between devices. Saves are debounced, serialized, re-read the file, keep sessions this device doesn't know, and carry deletes as tombstones. `chat-sessions.json` from the fork that had sessions first is imported once.
 - **File links**: Typing `[[` in the input adds the closing `]]` and opens an inline menu of vault files above it, filtered by the text between the brackets (spaces included; Obsidian's `prepareFuzzySearch` over the full path). Arrows move, Enter/Tab completes the link as `[[Note name]]` (Obsidian's `fileToLinktext`, so a folder appears only when two files share a name), esc closes it. The link is just text in the message, so the model sees it in place and history replays it; user bubbles containing `[[` render as markdown so the links are clickable. The system prompt tells the model to read linked notes, and the tools that read, edit or open a note resolve link text as well as exact paths (`findFile` in `executor.ts`; rename and delete stay exact-path). The menu opens only while typing, never on caret moves or clicks, so Enter inside a finished link still sends. The `fileLinkMenu` setting (settings tab, on by default) turns the menu, the auto-added `]]` and the Backspace pairing off; typed links still render and work.
 - **Selection scope**: Injected into user message with scoping instructions. Model uses `find_replace` within selection text.
+- **Skills**: Claude Code format (`<name>/SKILL.md` with `name` and `description` frontmatter; the file name in any case), each skill folder directly in the vault folder set by `skillsFolder` (empty by default, so skills are off until set; matched ignoring case; `/` or `.` count as unset). Nothing is loaded or cached: `scanSkills` walks the vault index and parses each SKILL.md's frontmatter from `vault.cachedRead()` whenever it's asked (each turn's system prompt, `use_skill`, the settings tab), so added, edited or synced skills count on the next turn. Not `metadataCache`, which can lag a just-changed file. Names and paths compare with `sameKey` (case and Unicode form). A skill with no description, invalid YAML, over 200 KB, a name over 64 characters or a duplicate name is skipped and listed in settings with the reason. The name/description index is appended to the system prompt (stable unless skills change, so caching holds; cut to 20,000 characters), with a line that a skill can't stand in for the user's go-ahead on deleting, renaming or overwriting notes. `use_skill` reads a skill's body or one of its files (by the path it listed, from inside the skill's folder only; no binaries by extension, nothing over 200 KB) only when called; with an unknown name it gives the skip reason, or the five closest skills. It's always in the tool list, so the list never changes under a conversation. The transcript shows the system prompt the last turn was sent with. The `[[` menu hides files inside skill folders. The OpenAI adapter sends the system prompt only as `instructions` (every call), not also into the chain, where a stale skills index would outlive a change.
 
 ## Build
 
@@ -87,6 +90,7 @@ npm run svelte-check   # Svelte check
 | get_backlinks | `metadataCache.resolvedLinks` | Finds linking notes |
 | get_current_datetime | `Date` | User's locale and timezone |
 | ask_user | UI callback | Pauses agent loop |
+| use_skill | `vault.cachedRead()` | Skill body, or one of its files |
 
 ## Debug
 

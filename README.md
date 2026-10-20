@@ -23,7 +23,7 @@ That's it. Two providers. The best models. Fetch the full model list from the AP
 
 ## What the AI can do
 
-The chat assistant has 14 tools that map directly to Obsidian's Vault API:
+The chat assistant has 15 tools that map directly to Obsidian's Vault API:
 
 - **read_document** / **read_file**: Read any note in your vault
 - **edit_document**: Find-and-replace, insert, or replace content
@@ -38,12 +38,21 @@ The chat assistant has 14 tools that map directly to Obsidian's Vault API:
 - **get_backlinks**: Find all notes that link to a given document
 - **get_current_datetime**: Get the current date and time in the user's locale
 - **ask_user**: Ask you a question when something is ambiguous
+- **use_skill**: Load one of your skills
 
 The AI reads before it edits, prefers surgical find-and-replace over full rewrites, and acts on your confirmations without re-asking.
 
 ## Selection scope
 
 Select text in a note, right-click, and choose "Send selection to Chat". The selection appears as a pill above the input. The AI works only within that selection, leaving the rest of the document untouched. Dismiss the pill to go back to full-document mode.
+
+## Skills
+
+Skills are saved instructions for a kind of task, in Claude Code's format: a folder per skill with a `SKILL.md` that has a `name` and `description` in its frontmatter.
+
+- **Where they live**: a folder in your vault (set it in Settings > Skills folder, for example `Skills`; skills are off until you do), one folder per skill, directly in it (as in Claude Code: a skill one folder deeper isn't found). It syncs like any note, so skills work on mobile too. Changes count from your next message; there's nothing to reload. Settings list the skills found, and any that couldn't be read.
+- **Using one**: just ask. The chat sees every skill's name and description (up to about 20,000 characters of them; past that, the rest aren't listed), and loads one whose description matches your request.
+- **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
 ## Install
 
