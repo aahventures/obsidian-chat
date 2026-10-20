@@ -11,6 +11,8 @@ export interface ChatSettings {
   baseUrl: string;
   /** Typing [[ in the chat input suggests vault files and adds the closing ]]. */
   fileLinkMenu: boolean;
+  /** Vault folder holding skills as `<name>/SKILL.md`. Empty for none. */
+  skillsFolder: string;
 }
 
 export const DEFAULT_SETTINGS: ChatSettings = {
@@ -21,6 +23,8 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   enableWebSearch: true,
   baseUrl: "",
   fileLinkMenu: true,
+  // Off until set: a vault may already have a Skills folder that was never meant as skills.
+  skillsFolder: "",
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
@@ -97,6 +101,8 @@ export interface ToolResult {
    * tools that fall back to the active document have no path in their input.
    */
   path?: string;
+  /** The link's text, when the file name alone wouldn't say what was used (a skill's SKILL.md). */
+  label?: string;
   /** Optional before/after snapshot for rendering an edit diff in the UI. */
   diff?: {
     path: string;

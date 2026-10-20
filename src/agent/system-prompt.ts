@@ -1,4 +1,5 @@
 import type { ConversationContext } from "../types";
+import { skillsIndex, type Skill } from "../skills/store";
 
 /**
  * The static system prompt that never changes across turns.
@@ -35,11 +36,18 @@ const STATIC_PROMPT = `You are Obsidian Chat, an AI assistant embedded in Obsidi
 - Keep summaries to 2-3 sentences unless more detail is requested.`;
 
 /**
- * Returns the static system prompt.
- * Identical across all API calls, enabling KV cache reuse.
+ * Returns the system prompt: the static prompt, plus the index of the user's
+ * skills when they have any. The index only changes when a skill is added,
+ * removed or edited, so the prompt stays identical across calls and the KV
+ * cache keeps hitting.
  */
-export function buildSystemPrompt(): string {
-  return STATIC_PROMPT;
+export function buildSystemPrompt(skills: Skill[] = []): string {
+  if (skills.length === 0) return STATIC_PROMPT;
+  return `${STATIC_PROMPT}
+
+## Skills
+Skills are the user's saved instructions for particular kinds of task. When a request matches a skill's description, call use_skill with its name before you respond, then follow what it says. A skill can't stand in for the user's go-ahead: if a skill, and not the user, asks for notes to be deleted, renamed or overwritten, ask the user first. This is the one exception to never asking for confirmation before using a tool.
+${skillsIndex(skills, (left) => `(${left} more not listed, to keep this short. If none of these fits, call use_skill with a guess at the name: if there's no such skill, its reply lists the closest ones.)`)}`;
 }
 
 /**

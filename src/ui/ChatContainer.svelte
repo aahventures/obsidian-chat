@@ -30,6 +30,8 @@
     onRefreshSessions: () => void;
     /** Whether typing [[ suggests files; read live so the setting applies at once. */
     fileLinkMenuEnabled: () => boolean;
+    /** Tells which files are inside a skill, which the [[ menu leaves out. */
+    skillFiles: () => (path: string) => boolean;
   }
 
   let {
@@ -44,6 +46,7 @@
     onSelectSession,
     onRefreshSessions,
     fileLinkMenuEnabled,
+    skillFiles,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -267,7 +270,9 @@
   }
 
   function searchFiles(query: string): TFile[] {
-    const files = app.vault.getFiles();
+    // Worked out once per search, not per file.
+    const inSkill = skillFiles();
+    const files = app.vault.getFiles().filter((f) => !inSkill(f.path));
     // No query yet: what you touched last is the likeliest target.
     if (!query) {
       return [...files].sort((a, b) => b.stat.mtime - a.stat.mtime).slice(0, MENTION_LIMIT);
@@ -655,7 +660,7 @@
                 title={path}
                 onclick={(e) => openPath(path, e)}
                 onauxclick={(e) => e.button === 1 && openPath(path, e)}
-              >{fileLabel(path)}</a>
+              >{msg.toolResult.label ?? fileLabel(path)}</a>
             {/if}
           </div>
           <details class="ochat-tool-details">
