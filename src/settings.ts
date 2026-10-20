@@ -1,4 +1,14 @@
-import { App, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import {
+  AbstractInputSuggest,
+  App,
+  Notice,
+  PluginSettingTab,
+  Setting,
+  TFolder,
+  prepareFuzzySearch,
+  requestUrl,
+} from "obsidian";
+import { scanSkills, skillsFolderPath } from "./skills/store";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
 
@@ -284,6 +294,100 @@ export class ChatSettingTab extends PluginSettingTab {
             }
           })
       );
+
+    // Last, under its own heading, so the general settings above stay together.
+    this.displaySkills(containerEl);
+  }
+
+  private displaySkills(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    new Setting(containerEl).setName("Skills").setHeading();
+
+    // Read off the vault when the tab is drawn and when the folder changes,
+    // the same way the chat reads it each turn.
+    const summary = async (): Promise<DocumentFragment> => {
+      const frag = document.createDocumentFragment();
+      const path = skillsFolderPath(s.skillsFolder);
+      if (!path) {
+        frag.append("No skills folder set.");
+        return frag;
+      }
+      const { root, skills, skipped } = await scanSkills(this.app, s.skillsFolder);
+      if (!root) {
+        frag.append(`There's no folder "${path}" in this vault.`);
+        return frag;
+      }
+      frag.append(skills.length === 0 ? "None found." : `${skills.length}: ${skills.map((k) => k.name).join(", ")}.`);
+      for (const k of skipped) {
+        frag.createEl("br");
+        frag.append(`Not loaded: ${k.folder}: ${k.reason}.`);
+      }
+      return frag;
+    };
+    // Set at the end of this section; refreshed in place, since redrawing the
+    // tab while the folder is being typed would take focus out of the field.
+    let loadedSetting: Setting | undefined;
+    const show = (value: string) =>
+      summary()
+        // Typing fast starts several; only the one for the value now set counts.
+        .then((desc) => {
+          if (loadedSetting && s.skillsFolder === value) loadedSetting.setDesc(desc);
+        })
+        .catch((e) => console.warn("Obsidian Chat: couldn't list skills", e));
+    const save = async (value: string) => {
+      s.skillsFolder = value.trim();
+      await this.plugin.saveSettings();
+      void show(s.skillsFolder);
+    };
+
+    new Setting(containerEl)
+      .setName("Skills folder")
+      .setDesc(
+        "A vault folder of skills, each in its own folder as <name>/SKILL.md (Claude Code's format). " +
+          "It syncs like any note, so skills here work on mobile too. " +
+          "Just ask, and the chat uses a skill whose description matches. Leave it empty for no skills. " +
+          "If you rename or move the folder, update this to match."
+      )
+      .addText((text) => {
+        text.setPlaceholder("e.g. Skills").setValue(s.skillsFolder).onChange(save);
+        new FolderSuggest(this.app, text.inputEl, save);
+      });
+
+    const found = new Setting(containerEl).setName("Skills found");
+    loadedSetting = found;
+    void show(s.skillsFolder);
+  }
+}
+
+// ─── Skills ─────────────────────────────────────────────────────────────────
+
+/** Suggests vault folders as you type, for the skills folder setting. */
+class FolderSuggest extends AbstractInputSuggest<TFolder> {
+  constructor(app: App, private inputEl: HTMLInputElement, private onPick: (path: string) => unknown) {
+    super(app, inputEl);
+  }
+
+  getSuggestions(query: string): TFolder[] {
+    const folders = this.app.vault.getAllFolders(false);
+    if (!query) return folders.slice(0, 20);
+    const match = prepareFuzzySearch(query);
+    return folders
+      .map((f) => ({ f, r: match(f.path) }))
+      .filter((x) => x.r)
+      .sort((a, b) => b.r!.score - a.r!.score)
+      .slice(0, 20)
+      .map((x) => x.f);
+  }
+
+  renderSuggestion(folder: TFolder, el: HTMLElement): void {
+    el.setText(folder.path);
+  }
+
+  selectSuggestion(folder: TFolder): void {
+    this.inputEl.value = folder.path;
+    // onPick saves, which can fail (a locked data.json): don't leave that unhandled.
+    void Promise.resolve(this.onPick(folder.path)).catch((e) => console.warn("Obsidian Chat: couldn't save the skills folder", e));
+    this.close();
   }
 }
 
