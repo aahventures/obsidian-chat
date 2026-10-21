@@ -1541,9 +1541,8 @@
       max-width: 95%;
     }
 
-    /* Obsidian's mobile drawer already reserves the bottom safe area (and room
-       for its navbar), so adding env(safe-area-inset-bottom) here double-counts
-       it and leaves a gap under the input. */
+    /* Obsidian's mobile view already pads the bottom safe area, so adding
+       env(safe-area-inset-bottom) here double-counts it. */
     .ochat-input-bar {
       gap: 10px;
       padding: 10px 12px;
