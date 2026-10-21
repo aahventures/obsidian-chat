@@ -4,6 +4,7 @@
   import { Keymap, MarkdownRenderer, Notice, prepareFuzzySearch } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
   import { lineDiff } from "../util/diff";
+  import { commandWord, isCommandName, sameKey } from "../skills/store";
 
   interface ChatMessage {
     id: number;
@@ -32,6 +33,8 @@
     fileLinkMenuEnabled: () => boolean;
     /** Tells which files are inside a skill, which the [[ menu leaves out. */
     skillFiles: () => (path: string) => boolean;
+    /** The skills a message can start with /name to use, for the / menu. */
+    listSkills: () => Promise<Array<{ name: string; description: string }>>;
   }
 
   let {
@@ -47,6 +50,7 @@
     onRefreshSessions,
     fileLinkMenuEnabled,
     skillFiles,
+    listSkills,
   }: Props = $props();
 
   let displayModel = $state("");
@@ -146,6 +150,8 @@
     placeholder = "Type your answer...";
     inputEnabled = true;
     awaitingAnswer = true;
+    // An answer can't use a skill.
+    command = null;
     textareaEl?.focus();
   }
 
@@ -171,9 +177,8 @@
    */
   export function clearInput(): void {
     inputText = "";
-    // An open [[ menu is part of the draft too.
-    mention = null;
-    dismissedStart = -1;
+    // An open menu is part of the draft too.
+    closeMenus();
     resetHeight();
   }
 
@@ -225,8 +230,7 @@
     if (!text) return;
 
     inputText = "";
-    mention = null;
-    dismissedStart = -1;
+    closeMenus();
     resetHeight();
 
     // An answer is a tool result, not a turn, so it can't carry the selection:
@@ -251,13 +255,50 @@
 
   /** The [[query being typed at the caret, or null. `start` is the index of the [[. */
   let mention = $state<{ start: number; query: string } | null>(null);
-  let mentionIndex = $state(0);
   /** A [[ escaped out of: stays plain text until the caret leaves it. */
   let dismissedStart = -1;
   let menuEl: HTMLElement | undefined = $state();
+  /** The /name being typed at the start of the message, or null. */
+  let command = $state<{ query: string } | null>(null);
+  /** The / menu was escaped out of: it stays shut until the message no longer starts with /. */
+  let commandDismissed = false;
 
-  const mentionResults = $derived(mention ? searchFiles(mention.query) : []);
-  const menuOpen = $derived(mentionResults.length > 0);
+  /** A row in the menu above the input: a file for [[, a skill for /. */
+  interface MenuItem {
+    key: string;
+    name: string;
+    detail: string;
+    pick: () => void;
+  }
+
+  let menuIndex = $state(0);
+  const menuItems = $derived<MenuItem[]>(
+    mention ? fileItems(mention.query) : command ? skillItems(command.query) : []
+  );
+  const menuOpen = $derived(menuItems.length > 0);
+
+  function fileItems(query: string): MenuItem[] {
+    return searchFiles(query).map((file) => ({
+      key: file.path,
+      name: file.name,
+      detail: file.parent?.path === "/" ? "" : (file.parent?.path ?? ""),
+      pick: () => confirmMention(file),
+    }));
+  }
+
+  /** Close both menus and forget what was escaped out of: the draft's gone or sent. */
+  function closeMenus(): void {
+    mention = null;
+    dismissedStart = -1;
+    command = null;
+    commandDismissed = false;
+  }
+
+  /** What typing or moving the caret does to the menus. */
+  function updateMenus(typing: boolean): void {
+    updateMention(typing);
+    updateCommand(typing);
+  }
 
   /**
    * Keep the highlighted row visible. Only the arrow keys call this: scrolling
@@ -319,15 +360,93 @@
       return;
     }
     if (mention?.start === start && mention.query === m[1]) return;
-    mentionIndex = 0;
+    menuIndex = 0;
     if (menuEl) menuEl.scrollTop = 0;
     mention = { start, query: m[1] };
   }
 
+  // ─── /name skills ─────────────────────────────────────────────────────
+  // A message that starts /name uses that skill (the agent loop reads it in).
+  // Typing / at the start opens a menu of skills, filtered by what follows.
+
+  /** The skills, read each time the menu opens; it shows once they're in. */
+  // Raw: replaced whole, never changed in place, so no deep proxies.
+  let skillList = $state.raw<Array<{ name: string; description: string }>>([]);
+  let skillsRequest = 0;
+
+  /** Same rules as the [[ menu: only typing opens it. An answer to a question can't use a skill. */
+  function updateCommand(typing: boolean): void {
+    // An answer can't use a skill, and "/[[" is the [[ menu's.
+    if (!textareaEl || awaitingAnswer || mention) {
+      command = null;
+      return;
+    }
+    if (!textareaEl.value.startsWith("/")) commandDismissed = false;
+    const before = textareaEl.value.slice(0, textareaEl.selectionStart);
+    // A name is one word, so a space closes the menu.
+    const word = commandWord(before);
+    if (word === null || before !== `/${word}` || commandDismissed || (!typing && !command)) {
+      command = null;
+      return;
+    }
+    if (command?.query === word) return;
+    if (!command) loadSkills();
+    menuIndex = 0;
+    if (menuEl) menuEl.scrollTop = 0;
+    command = { query: word };
+  }
+
+  function loadSkills(): void {
+    const request = ++skillsRequest;
+    skillList = [];
+    listSkills()
+      .then((list) => {
+        if (request === skillsRequest) skillList = list;
+      })
+      .catch((e) => console.warn("Obsidian Chat: couldn't read skills for the / menu", e));
+  }
+
+  /**
+   * Skills whose name starts with the query, in the store's name order (so the
+   * one it names exactly comes first). Only a start: a match inside a name would let
+   * Tab turn "/etc" into "/sketch". A name with a space can't be typed as
+   * /name, so it isn't offered.
+   */
+  function skillItems(query: string): MenuItem[] {
+    const q = sameKey(query);
+    return skillList
+      .filter((s) => isCommandName(s.name) && sameKey(s.name).startsWith(q))
+      .map((skill) => ({
+        key: skill.name,
+        name: `/${skill.name}`,
+        detail: skill.description,
+        pick: () => confirmCommand(skill.name),
+      }));
+  }
+
+  /** Complete the name (Tab or a click): /wri becomes /write-in-my-voice and a space, caret after it. */
+  function confirmCommand(name: string): void {
+    if (!command || !textareaEl) return;
+    // The query is the text from the / to the caret. When there is one, the
+    // rest of the word the caret is in goes too, as the [[ menu replaces a
+    // whole link; a / typed in front of a word leaves the word alone.
+    const after = inputText.slice(1 + command.query.length);
+    const rest = command.query ? after.replace(/^\S+/, "") : after;
+    const spaced = /^\s/.test(rest);
+    inputText = `/${name}${spaced ? rest : " " + rest}`;
+    command = null;
+    // After the space it added, or right after the name when whitespace was there.
+    const end = name.length + (spaced ? 1 : 2);
+    void tick().then(() => {
+      textareaEl?.focus();
+      textareaEl?.setSelectionRange(end, end);
+      autoGrow();
+    });
+  }
+
   /** Complete the link: [[query]] becomes [[Note name]], caret after it. */
-  function confirmMention(file: TFile | undefined): void {
-    // The list can shrink under the highlighted row (a file deleted mid-typing).
-    if (!file || !mention || !textareaEl) return;
+  function confirmMention(file: TFile): void {
+    if (!mention || !textareaEl) return;
     const { start, query } = mention;
     const head = inputText.slice(0, start);
     // Replace the whole [[...]] when it's closed, even with the caret mid-query
@@ -370,30 +489,41 @@
         inputText = value.slice(0, caret - 2) + value.slice(caret + 2);
         void tick().then(() => {
           textareaEl?.setSelectionRange(caret - 2, caret - 2);
-          updateMention(false);
+          updateMenus(false);
         });
         return;
       }
     }
 
-    if (menuOpen && fileLinkMenuEnabled()) {
+    // Turned off while the [[ menu was open: it goes, and keys act as usual.
+    if (mention && !fileLinkMenuEnabled()) mention = null;
+    if (menuOpen) {
       if (e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
-        const n = mentionResults.length;
-        mentionIndex = (mentionIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+        const n = menuItems.length;
+        menuIndex = (menuIndex + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
         scrollSelectedIntoView();
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      // Tab completes in both menus. Enter does in the [[ menu only: in the /
+      // menu it always sends what's typed, so it never has to guess whether
+      // you meant to complete or to send. Shift+Enter still starts a new line.
+      if ((e.key === "Enter" && !e.shiftKey && mention) || e.key === "Tab") {
         e.preventDefault();
-        confirmMention(mentionResults[mentionIndex]);
+        // The list can shrink under the highlighted row (a file deleted mid-typing).
+        menuItems[menuIndex]?.pick();
         return;
       }
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        dismissedStart = mention?.start ?? -1;
-        mention = null;
+        if (mention) {
+          dismissedStart = mention.start;
+          mention = null;
+        } else {
+          commandDismissed = true;
+          command = null;
+        }
         return;
       }
     }
@@ -404,10 +534,11 @@
   }
 
   function handleInput(e: Event): void {
-    // Off: [[ is plain text, and the vault is never scanned.
+    // Off: [[ is plain text, and the vault is never scanned (updateMention
+    // closes its menu); the / menu still works.
     if (!fileLinkMenuEnabled()) {
-      mention = null;
       autoGrow();
+      updateMenus(true);
       return;
     }
     const ie = e as InputEvent;
@@ -424,7 +555,7 @@
       }
     }
     autoGrow();
-    updateMention(true);
+    updateMenus(true);
   }
 
   /**
@@ -737,19 +868,19 @@
     </div>
   {/if}
 
-  <!-- [[ file menu -->
+  <!-- [[ file menu, or / skill menu -->
   {#if menuOpen}
     <div class="ochat-mention-menu" bind:this={menuEl}>
-      {#each mentionResults as file, i (file.path)}
+      {#each menuItems as item, i (item.key)}
         <button
           class="ochat-mention-item"
-          class:ochat-mention-selected={i === mentionIndex}
+          class:ochat-mention-selected={i === menuIndex}
           onmousedown={keepFocus}
-          onmousemove={() => (mentionIndex = i)}
-          onclick={() => confirmMention(file)}
+          onmousemove={() => (menuIndex = i)}
+          onclick={item.pick}
         >
-          <span class="ochat-mention-name">{file.name}</span>
-          <span class="ochat-mention-path">{file.parent?.path === "/" ? "" : file.parent?.path}</span>
+          <span class="ochat-mention-name">{item.name}</span>
+          <span class="ochat-mention-path">{item.detail}</span>
         </button>
       {/each}
     </div>
@@ -765,9 +896,12 @@
       rows="1"
       onkeydown={handleKeydown}
       oninput={handleInput}
-      onkeyup={() => updateMention(false)}
-      onclick={() => updateMention(false)}
-      onblur={() => (mention = null)}
+      onkeyup={() => updateMenus(false)}
+      onclick={() => updateMenus(false)}
+      onblur={() => {
+        mention = null;
+        command = null;
+      }}
     ></textarea>
     {#if inputEnabled}
       <button
@@ -1354,7 +1488,7 @@
     text-decoration: underline;
   }
 
-  /* ─── [[ file menu ────────────────────────────────────────────────────── */
+  /* ─── [[ file menu, / skill menu ────────────────────────────────────────────────────── */
   .ochat-mention-menu {
     display: flex;
     flex-direction: column;
