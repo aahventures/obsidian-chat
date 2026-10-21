@@ -13,7 +13,7 @@ User Input -> Agent Loop -> API Client (requestUrl) -> Claude/OpenAI
 ```
 
 - **API clients** use `requestUrl()` (not `fetch`) because mobile WebViews enforce CORS
-- **Anthropic** uses Messages API with adaptive thinking and prompt caching
+- **Anthropic** uses Messages API with adaptive thinking (`budget_tokens` only for models before 4.6; `THINKING_MODES` in `anthropic.ts`) and prompt caching
 - **OpenAI** uses Responses API with `previous_response_id` for multi-turn
 - **Agent loop** is provider-agnostic: send -> tools -> send -> done
 - **UI** is a single Svelte 5 component (`ChatContainer.svelte`) mounted in an `ItemView`

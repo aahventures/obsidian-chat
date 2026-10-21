@@ -12,6 +12,51 @@ export const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
 export const ANTHROPIC_VERSION = "2023-06-01";
 const ANTHROPIC_API_URL = `${ANTHROPIC_API_BASE}/messages`;
 
+type ThinkingMode = "adaptive" | "budget" | "none";
+
+/**
+ * How each Claude model takes thinking, by id prefix, longest match wins (as in
+ * context-window.ts), so dated ids and point releases match their family.
+ * Every model from 4.6 on takes `adaptive`, and most reject `budget_tokens`
+ * with a 400 (Fable has thinking always on and rejects any other explicit
+ * config); Opus 4.7/4.8 and the 4.6 models run without thinking unless it's
+ * asked for. Older models only think with a fixed budget. Claude 3 models
+ * before 3.7 have no thinking.
+ */
+const THINKING_MODES: Array<[prefix: string, mode: ThinkingMode]> = [
+  ["claude-fable-5", "adaptive"],
+  ["claude-mythos", "adaptive"],
+  ["claude-opus-5", "adaptive"],
+  ["claude-opus-4-8", "adaptive"],
+  ["claude-opus-4-7", "adaptive"],
+  ["claude-opus-4-6", "adaptive"],
+  ["claude-opus-4", "budget"],
+  ["claude-sonnet-5", "adaptive"],
+  ["claude-sonnet-4-6", "adaptive"],
+  ["claude-sonnet-4", "budget"],
+  ["claude-haiku-5", "adaptive"],
+  ["claude-haiku-4-5", "budget"],
+  ["claude-3-7-sonnet", "budget"],
+  ["claude-3", "none"],
+];
+
+/**
+ * The `thinking` field for a model, or null to send none. A Claude model not
+ * in the table is newer than it, so it gets `adaptive`; an id that isn't a
+ * Claude one gets nothing rather than a config it may reject.
+ */
+export function thinkingConfigOf(model: string): Record<string, unknown> | null {
+  let best: [string, ThinkingMode] | null = null;
+  for (const entry of THINKING_MODES) {
+    if (model.startsWith(entry[0]) && (!best || entry[0].length > best[0].length)) best = entry;
+  }
+  const mode = best?.[1] ?? (model.startsWith("claude-") ? "adaptive" : "none");
+  if (mode === "adaptive") return { type: "adaptive" };
+  // Must stay below max_tokens.
+  if (mode === "budget") return { type: "enabled", budget_tokens: 8192 };
+  return null;
+}
+
 /**
  * Sends a message to the Anthropic Messages API via requestUrl().
  *
@@ -42,19 +87,8 @@ export async function sendAnthropicMessage(
     messages: withConversationCacheBreakpoint(messages.map(toAnthropicMessage)),
   };
 
-  // Enable thinking based on model generation:
-  // - Sonnet 4.6 / Opus 4.6: use adaptive thinking (auto-determines depth)
-  // - Sonnet 4 / Opus 4 / older: use manual thinking with budget
-  const is46Model = model.includes("4-6") || model.includes("4.6");
-  const supportsThinking = model.includes("claude-sonnet-4") || model.includes("claude-opus") || model.includes("claude-sonnet-3-7");
-
-  if (is46Model) {
-    // Adaptive: Claude decides when/how much to think per request
-    body.thinking = { type: "adaptive" };
-  } else if (supportsThinking) {
-    // Manual: fixed budget for older models
-    body.thinking = { type: "enabled", budget_tokens: 8192 };
-  }
+  const thinking = thinkingConfigOf(model);
+  if (thinking) body.thinking = thinking;
 
   if (tools.length > 0 || settings.enableWebSearch) {
     const apiTools: Record<string, unknown>[] = tools.map((t, i, arr) => {
