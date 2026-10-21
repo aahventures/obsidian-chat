@@ -208,10 +208,23 @@ export function commandAtEnd(text: string): { start: number; word: string } | nu
  */
 export function skillsNamed<T extends { name: string }>(skills: T[], message: string): T[] {
   const found: T[] = [];
+  for (const { skill } of skillMentions(skills, message)) {
+    if (!found.includes(skill)) found.push(skill);
+  }
+  return found;
+}
+
+/** Each /name in a text that names a skill in full: where it is (from its /), and the skill. */
+export function skillMentions<T extends { name: string }>(
+  skills: T[],
+  text: string
+): Array<{ start: number; end: number; skill: T }> {
+  const found: Array<{ start: number; end: number; skill: T }> = [];
   // matchAll works on a copy of the regex, so the shared one's lastIndex is never touched.
-  for (const m of message.matchAll(SLASH_WORDS)) {
+  for (const m of text.matchAll(SLASH_WORDS)) {
     const skill = m[1] ? findSkill(skills, m[1]) : undefined;
-    if (skill && !found.includes(skill)) found.push(skill);
+    const end = m.index + m[0].length;
+    if (skill) found.push({ start: end - m[1].length - 1, end, skill });
   }
   return found;
 }

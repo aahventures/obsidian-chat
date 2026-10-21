@@ -322,6 +322,15 @@ export class SessionStore {
         this.append(session, { type: "error", text: error });
       },
 
+      onSkillsNamed: (skills) => {
+        // This turn's message: the last one yours, as the skills run before anything is asked.
+        const entry = findLast(session.chatHistory, (e) => e.type === "user");
+        if (!entry || skills.length === 0) return;
+        entry.skills = skills;
+        session.touch();
+        this.emit(session, { kind: "user-skills", skills });
+      },
+
       onTrim: (turns) => {
         // Only the latest trim is worth a line; the divider tracks the rest.
         session.chatHistory = session.chatHistory.filter((e) => e.type !== "notice");

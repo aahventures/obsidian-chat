@@ -1,10 +1,10 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { App, Component as ObsidianComponent, TFile } from "obsidian";
-  import { Keymap, MarkdownRenderer, Menu, Notice, prepareFuzzySearch, setTooltip } from "obsidian";
-  import type { ToolResult, SelectionScope, ContextUsage } from "../types";
+  import { Keymap, MarkdownRenderer, Menu, Notice, Platform, displayTooltip, parseLinktext, prepareFuzzySearch, setTooltip } from "obsidian";
+  import type { NamedSkill, ToolResult, SelectionScope, ContextUsage } from "../types";
   import { lineDiff } from "../util/diff";
-  import { commandAtEnd, isCommandName, sameKey } from "../skills/store";
+  import { commandAtEnd, isCommandName, sameKey, skillMentions } from "../skills/store";
 
   interface ChatMessage {
     id: number;
@@ -15,6 +15,8 @@
     toolResult?: ToolResult;
     /** On a user message: the editor selection that was sent with it. */
     selection?: SelectionScope;
+    /** On a user message: the skills it named that ran, shown as chips. */
+    skills?: NamedSkill[];
   }
 
   interface Props {
@@ -124,8 +126,17 @@
 
   // ─── Public API (called from chat-view.ts / chat-modal.ts) ────────────
 
-  export function addUserMessage(text: string, selection?: SelectionScope): void {
-    messages.push({ id: nextId++, type: "user", text, selection });
+  export function addUserMessage(text: string, selection?: SelectionScope, skills?: NamedSkill[]): void {
+    messages.push({ id: nextId++, type: "user", text, selection, skills });
+  }
+
+  /** The skills your last message ran, once the turn has read them: its chips. */
+  export function setLastUserSkills(skills: NamedSkill[]): void {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type !== "user") continue;
+      messages[i] = { ...messages[i], skills };
+      return;
+    }
   }
 
   export function addAssistantMessage(text: string): void {
@@ -665,6 +676,91 @@
     MarkdownRenderer.render(app, text, node, "", component);
   }
 
+  /**
+   * Your message as sent, from its raw text in one pass: [[links]] become
+   * clickable links and each /name that ran a skill a chip with its
+   * description (on hover, or a tap on a phone); the rest stays as typed. Not
+   * rendered as markdown: rendering moves the spaces, lines and code edges
+   * the loop's /name rule reads, so chips found in it disagreed with what ran.
+   * The skills are the ones recorded as run with the message, so an answer to
+   * a question, or a skill added or removed since, changes nothing.
+   */
+  function userText(node: HTMLElement, arg: { text: string; skills: unknown }) {
+    const draw = ({ text, skills }: typeof arg) => node.replaceChildren(userParts(text, skills));
+    draw(arg);
+    node.addEventListener("click", handleLinkClick);
+    node.addEventListener("auxclick", handleLinkClick);
+    return {
+      update: draw,
+      destroy() {
+        node.removeEventListener("click", handleLinkClick);
+        node.removeEventListener("auxclick", handleLinkClick);
+      },
+    };
+  }
+
+  /** A message's text with its [[links]] and chips in place. */
+  function userParts(text: string, skills: unknown): DocumentFragment {
+    const parts: Array<{ start: number; end: number; add: (into: DocumentFragment) => void }> = [];
+    for (const c of skillMentions(recordedSkills(skills), text)) {
+      parts.push({ start: c.start, end: c.end, add: (into) => fillChip(into.createSpan({ cls: "ochat-skill-chip" }), text.slice(c.start, c.end), c.skill) });
+    }
+    // A chip is what ran, so it wins: a link with a /name that ran in it stays as typed.
+    const hasChip = (start: number, end: number) => parts.some((p) => p.start < end && p.end > start);
+    for (const m of text.matchAll(/\[\[([^[\]\n]+)\]\]/g)) {
+      // [[Note|]] has no alias, so it shows the note; a | after the alias is part of
+      // it. In a table the bar is written "\\|": the backslash isn't the note's.
+      const bar = m[1].indexOf("|");
+      const target = (bar < 0 ? m[1] : m[1].slice(0, bar)).replace(/\\$/, "").trim();
+      const alias = bar < 0 ? "" : m[1].slice(bar + 1).trim();
+      const end = m.index + m[0].length;
+      // [[|alias]] opens nothing, so it isn't made a link.
+      if (!target || hasChip(m.index, end)) continue;
+      parts.push({ start: m.index, end, add: (into) => addLink(into, target, alias) });
+    }
+    parts.sort((a, b) => a.start - b.start);
+    const out = document.createDocumentFragment();
+    let at = 0;
+    for (const p of parts) {
+      out.append(text.slice(at, p.start));
+      p.add(out);
+      at = p.end;
+    }
+    out.append(text.slice(at));
+    return out;
+  }
+
+  /** A [[link]] as Obsidian shows one: its alias, or "Note > Heading" for a subpath. */
+  function addLink(into: DocumentFragment, target: string, alias: string): void {
+    const { path, subpath } = parseLinktext(target);
+    const shown = alias || [path, ...subpath.split("#").filter(Boolean).map((s) => s.replace(/^\^/, ""))].filter(Boolean).join(" > ");
+    into.createEl("a", { cls: "internal-link", text: shown, attr: { "data-href": target, href: target } });
+  }
+
+  /**
+   * A message's recorded skills, from the saved chat, which another device or
+   * version may have written: a malformed entry is left out rather than
+   * breaking the message.
+   */
+  function recordedSkills(skills: unknown): NamedSkill[] {
+    return Array.isArray(skills)
+      ? skills.filter((s): s is NamedSkill => typeof s?.name === "string" && typeof s?.description === "string")
+      : [];
+  }
+
+  /** A chip's text and its description, on hover or (on a phone, which has none) a tap. */
+  function fillChip(el: HTMLElement, label: string, skill: NamedSkill): void {
+    el.setText(label);
+    const tip = `/${skill.name}\n${skill.description}`;
+    // 400 ms and above, as in Claude Code (Obsidian's default wait is longer).
+    setTooltip(el, tip, { delay: 400, placement: "top" });
+    // A phone has no hover, so a tap shows it (displayTooltip is Obsidian 1.8.7+;
+    // before that a tap shows nothing). Not on desktop, where hover already does.
+    if (Platform.isMobile && typeof displayTooltip === "function") {
+      el.addEventListener("click", () => displayTooltip(el, tip, { placement: "top" }));
+    }
+  }
+
   // Use action for markdown rendering
   function markdown(node: HTMLElement, text: string) {
     renderMarkdown(node, text);
@@ -858,12 +954,7 @@
           </details>
         {/if}
         <div class="ochat-msg ochat-user-msg">
-          {#if msg.text?.includes("[[")}
-            <!-- Rendered so [[file links]] are clickable; other messages stay plain text -->
-            <div class="ochat-msg-content" use:markdown={msg.text}></div>
-          {:else}
-            <div class="ochat-msg-content">{msg.text}</div>
-          {/if}
+          <div class="ochat-msg-content" use:userText={{ text: msg.text ?? "", skills: msg.skills ?? [] }}></div>
         </div>
 
       {:else if msg.type === "assistant"}
@@ -1311,6 +1402,17 @@
     flex-shrink: 0;
   }
 
+  /* A /name in your message that ran a skill: hover for its description. On the
+     accent-coloured bubble, so it brightens it rather than using the accent.
+     Made in code (userText), so outside Svelte's scoping. */
+  .ochat-msg-content :global(.ochat-skill-chip) {
+    background-color: rgba(255, 255, 255, 0.22);
+    font-weight: var(--font-semibold);
+    border-radius: var(--radius-s);
+    padding: 0 0.25em;
+    cursor: default;
+  }
+
   /* The path a tool acted on: click to open the note. Ellipsized rather than
      wrapped, so a deep path never pushes the row wider than the pane. */
   .ochat-file-link {
@@ -1615,13 +1717,11 @@
     color: var(--text-normal);
   }
 
-  /* A rendered user message wraps its text in <p>; trim the ends like the assistant's. */
-  .ochat-user-msg :global(p:first-child) {
-    margin-top: 0;
-  }
-
-  .ochat-user-msg :global(p:last-child) {
-    margin-bottom: 0;
+  /* Your message as typed (it isn't rendered as markdown): keep its line breaks and spaces. */
+  .ochat-user-msg .ochat-msg-content {
+    white-space: pre-wrap;
+    /* A long path or URL wraps rather than widening the bubble. */
+    overflow-wrap: anywhere;
   }
 
   /* Links in your own bubble. The theme colours links through these variables, so

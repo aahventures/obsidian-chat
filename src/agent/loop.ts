@@ -270,6 +270,9 @@ export class AgentLoop {
       // without the other. The rows are added only now, once there are results,
       // so a stop can't leave one running.
       turn.content = build(...invoked.map((s) => this.skillText(s.name, s.result)));
+      callbacks.onSkillsNamed?.(
+        invoked.flatMap((s) => (s.result.isError ? [] : [{ name: s.name, description: s.description }]))
+      );
       for (const s of invoked) {
         const id = uniqueId("skill-");
         callbacks.onToolCall(id, "use_skill", { name: s.name });
@@ -404,16 +407,16 @@ export class AgentLoop {
     userMessage: string,
     skills: Skill[],
     skipped: SkippedSkill[]
-  ): Promise<Array<{ name: string; result: ToolResult }>> {
+  ): Promise<Array<{ name: string; description: string; result: ToolResult }>> {
     // Both kinds in one pass, so they keep the message's order. A name that loaded
     // wins over a skipped one with the same name (a duplicate).
     const named = skillsNamed<Skill | SkippedSkill>([...skills, ...skipped], userMessage);
     return Promise.all(
       named.map(async (s) =>
         "file" in s
-          ? { name: s.name, result: await skillResult(this.app, s) }
+          ? { name: s.name, description: s.description, result: await skillResult(this.app, s) }
           // A skill that's there but didn't load: say why, rather than send /name as text.
-          : { name: s.name, result: { result: skippedReason(s), isError: true } }
+          : { name: s.name, description: "", result: { result: skippedReason(s), isError: true } }
       )
     );
   }
