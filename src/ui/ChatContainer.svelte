@@ -4,7 +4,7 @@
   import { Keymap, MarkdownRenderer, Notice, prepareFuzzySearch } from "obsidian";
   import type { ToolResult, SelectionScope } from "../types";
   import { lineDiff } from "../util/diff";
-  import { commandWord, isCommandName, sameKey } from "../skills/store";
+  import { commandAtEnd, isCommandName, sameKey } from "../skills/store";
 
   interface ChatMessage {
     id: number;
@@ -33,7 +33,7 @@
     fileLinkMenuEnabled: () => boolean;
     /** Tells which files are inside a skill, which the [[ menu leaves out. */
     skillFiles: () => (path: string) => boolean;
-    /** The skills a message can start with /name to use, for the / menu. */
+    /** The skills a message can name as /name to use, for the / menu. */
     listSkills: () => Promise<Array<{ name: string; description: string }>>;
   }
 
@@ -258,10 +258,13 @@
   /** A [[ escaped out of: stays plain text until the caret leaves it. */
   let dismissedStart = -1;
   let menuEl: HTMLElement | undefined = $state();
-  /** The /name being typed at the start of the message, or null. */
-  let command = $state<{ query: string } | null>(null);
-  /** The / menu was escaped out of: it stays shut until the message no longer starts with /. */
-  let commandDismissed = false;
+  /**
+   * The /name being typed at the caret, or null: at the start of the message or
+   * after a space, as in Claude Code. `start` is the index of the /.
+   */
+  let command = $state<{ start: number; query: string } | null>(null);
+  /** A / escaped out of: its menu stays shut until the caret leaves its word. */
+  let commandDismissedAt = -1;
 
   /** A row in the menu above the input: a file for [[, a skill for /. */
   interface MenuItem {
@@ -291,7 +294,7 @@
     mention = null;
     dismissedStart = -1;
     command = null;
-    commandDismissed = false;
+    commandDismissedAt = -1;
   }
 
   /** What typing or moving the caret does to the menus. */
@@ -366,8 +369,9 @@
   }
 
   // ─── /name skills ─────────────────────────────────────────────────────
-  // A message that starts /name uses that skill (the agent loop reads it in).
-  // Typing / at the start opens a menu of skills, filtered by what follows.
+  // A message naming /name, at the start or after a space, uses that skill (the
+  // agent loop reads it in). Typing / there opens a menu of skills, filtered by
+  // what follows; store.ts reads /words for both, so they agree.
 
   /** The skills, read each time the menu opens; it shows once they're in. */
   // Raw: replaced whole, never changed in place, so no deep proxies.
@@ -381,19 +385,21 @@
       command = null;
       return;
     }
-    if (!textareaEl.value.startsWith("/")) commandDismissed = false;
     const before = textareaEl.value.slice(0, textareaEl.selectionStart);
-    // A name is one word, so a space closes the menu.
-    const word = commandWord(before);
-    if (word === null || before !== `/${word}` || commandDismissed || (!typing && !command)) {
+    // The /word the caret ends; a name is one word, so a space closes the menu.
+    const at = commandAtEnd(before);
+    if (!at) commandDismissedAt = -1;
+    // Moving the caret never opens it or moves it to another /word, as with [[.
+    if (!at || at.start === commandDismissedAt || (!typing && command?.start !== at.start)) {
       command = null;
       return;
     }
-    if (command?.query === word) return;
+    const { start, word } = at;
+    if (command?.start === start && command.query === word) return;
     if (!command) loadSkills();
     menuIndex = 0;
     if (menuEl) menuEl.scrollTop = 0;
-    command = { query: word };
+    command = { start, query: word };
   }
 
   function loadSkills(): void {
@@ -409,7 +415,7 @@
   /**
    * Skills whose name starts with the query, in the store's name order (so the
    * one it names exactly comes first). Only a start: a match inside a name would let
-   * Tab turn "/etc" into "/sketch". A name with a space can't be typed as
+   * Tab or Enter turn "/etc" into "/sketch" (it can still become "/etcetera"). A name with a space can't be typed as
    * /name, so it isn't offered.
    */
   function skillItems(query: string): MenuItem[] {
@@ -424,19 +430,20 @@
       }));
   }
 
-  /** Complete the name (Tab or a click): /wri becomes /write-in-my-voice and a space, caret after it. */
+  /** Complete the name (Tab, Enter or a click): /wri becomes /write-in-my-voice and a space, caret after it. */
   function confirmCommand(name: string): void {
     if (!command || !textareaEl) return;
     // The query is the text from the / to the caret. When there is one, the
     // rest of the word the caret is in goes too, as the [[ menu replaces a
     // whole link; a / typed in front of a word leaves the word alone.
-    const after = inputText.slice(1 + command.query.length);
-    const rest = command.query ? after.replace(/^\S+/, "") : after;
+    const { start, query } = command;
+    const after = inputText.slice(start + 1 + query.length);
+    const rest = query ? after.replace(/^\S+/, "") : after;
     const spaced = /^\s/.test(rest);
-    inputText = `/${name}${spaced ? rest : " " + rest}`;
+    inputText = `${inputText.slice(0, start)}/${name}${spaced ? rest : " " + rest}`;
     command = null;
     // After the space it added, or right after the name when whitespace was there.
-    const end = name.length + (spaced ? 1 : 2);
+    const end = start + name.length + (spaced ? 1 : 2);
     void tick().then(() => {
       textareaEl?.focus();
       textareaEl?.setSelectionRange(end, end);
@@ -505,10 +512,13 @@
         scrollSelectedIntoView();
         return;
       }
-      // Tab completes in both menus. Enter does in the [[ menu only: in the /
-      // menu it always sends what's typed, so it never has to guess whether
-      // you meant to complete or to send. Shift+Enter still starts a new line.
-      if ((e.key === "Enter" && !e.shiftKey && mention) || e.key === "Tab") {
+      // Tab completes in both menus. Enter does too, as in Claude Code, except
+      // for a / later in the message, where it sends; a name typed in full
+      // completes as well, and the menu is gone once a space follows it, so the
+      // next Enter sends. Shift+Enter still starts a new line.
+      // "At the start" as the loop sees it: the message is trimmed when sent.
+      const enterPicks = mention !== null || (command !== null && inputText.slice(0, command.start).trim() === "");
+      if ((e.key === "Enter" && !e.shiftKey && enterPicks) || e.key === "Tab") {
         e.preventDefault();
         // The list can shrink under the highlighted row (a file deleted mid-typing).
         menuItems[menuIndex]?.pick();
@@ -521,7 +531,7 @@
           dismissedStart = mention.start;
           mention = null;
         } else {
-          commandDismissed = true;
+          commandDismissedAt = command?.start ?? -1;
           command = null;
         }
         return;
