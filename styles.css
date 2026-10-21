@@ -14,12 +14,14 @@
   min-width: 280px;
 }
 
-/* Mobile drawer: Obsidian pads every view's bottom by the safe area, but the
-   drawer already puts its tab selector pill under the view (and keeps its own
-   safe-area padding below that). On a chat that pins an input to the bottom,
-   the extra padding shows as a wide empty band under the input. */
+/* Mobile drawer: Obsidian pads every view's bottom by the safe area, but with
+   the keyboard closed the drawer already puts its tab selector pill under the
+   view, so on a chat that pins an input to the bottom the padding shows as a
+   wide empty band. The padding is only dropped while no keyboard is up:
+   min() with --keyboard-height gives 0 then, and Obsidian's own value as soon
+   as the keyboard opens, which is when the layout needs it. */
 .workspace-drawer .workspace-leaf-content[data-type="ochat-view"] .view-content {
-  padding-bottom: 0;
+  padding-bottom: min(max(var(--safe-area-inset-bottom), var(--size-4-8)), var(--keyboard-height, 0px));
 }
 
 /* ─── Session switcher (SuggestModal rows) ───────────────────────────────── */

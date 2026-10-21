@@ -1541,11 +1541,12 @@
       max-width: 95%;
     }
 
-    /* Obsidian's mobile view already pads the bottom safe area, so adding
-       env(safe-area-inset-bottom) here double-counts it. */
+    /* The safe area only matters while the keyboard is up (see styles.css);
+       with it closed the drawer's own padding already covers it. */
     .ochat-input-bar {
       gap: 10px;
       padding: 10px 12px;
+      padding-bottom: calc(10px + min(env(safe-area-inset-bottom, 0px), var(--keyboard-height, 0px)));
     }
 
     .ochat-input {
