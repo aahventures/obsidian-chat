@@ -186,20 +186,34 @@ export function isCommandName(name: string): boolean {
   return !/\s/.test(name);
 }
 
-/** The word a text starts /word with ("" for a lone /), or null when it doesn't start with /. */
-export function commandWord(text: string): string | null {
-  const m = /^\/(\S*)/.exec(text);
-  return m ? m[1] : null;
+/**
+ * A /word: at the start or after whitespace (as in Claude Code), so not a
+ * URL's or "and/or"'s. The chat's / menu and the loop both read /words with
+ * it, so what the menu completes is what runs.
+ */
+const SLASH_WORD = String.raw`(?:^|\s)\/(\S*)`;
+const SLASH_WORD_AT_END = new RegExp(`${SLASH_WORD}$`);
+const SLASH_WORDS = new RegExp(SLASH_WORD, "g");
+
+/** The /word the text ends with: where its / is, and the word ("" for a lone /); or null. */
+export function commandAtEnd(text: string): { start: number; word: string } | null {
+  const m = SLASH_WORD_AT_END.exec(text);
+  return m ? { start: text.length - m[1].length - 1, word: m[1] } : null;
 }
 
 /**
- * The skill a message starts /name with: the name, then a space or the end.
- * "/summarizer" and "/etc/hosts" name no skill. The / menu reads the word
- * with the same commandWord, so it agrees on what runs.
+ * The skills a message names as /name, anywhere in it, each once and in the
+ * order named. A name counts only in full, then a space or the end:
+ * "/summarizer", "/bt" for btw, and "/etc/hosts" name none.
  */
-export function skillAtStart<T extends { name: string }>(skills: T[], message: string): T | undefined {
-  const word = commandWord(message);
-  return word ? findSkill(skills, word) : undefined;
+export function skillsNamed<T extends { name: string }>(skills: T[], message: string): T[] {
+  const found: T[] = [];
+  // matchAll works on a copy of the regex, so the shared one's lastIndex is never touched.
+  for (const m of message.matchAll(SLASH_WORDS)) {
+    const skill = m[1] ? findSkill(skills, m[1]) : undefined;
+    if (skill && !found.includes(skill)) found.push(skill);
+  }
+  return found;
 }
 
 /** Which files the [[ menu leaves out: those inside a folder in the skills folder that holds a SKILL.md. */
