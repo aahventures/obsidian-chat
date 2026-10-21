@@ -7,6 +7,7 @@ import type {
   ContentBlock,
   OpenAIConversationState,
 } from "../types";
+import { splitCachedInput } from "./usage";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
@@ -212,13 +213,23 @@ function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
   }
 
   const stopReason = hasToolCalls ? "tool_use" : "end_turn";
-  const usage = data.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-
+  const usage = data.usage as
+    | {
+        input_tokens?: number;
+        output_tokens?: number;
+        input_tokens_details?: { cached_tokens?: number };
+      }
+    | undefined;
   return {
     content,
     stopReason,
+    model: typeof data.model === "string" ? data.model : undefined,
     usage: usage
-      ? { inputTokens: usage.input_tokens || 0, outputTokens: usage.output_tokens || 0 }
+      ? {
+          ...splitCachedInput(usage.input_tokens, usage.input_tokens_details?.cached_tokens),
+          outputTokens: usage.output_tokens || 0,
+          multiStep: output.some((item) => item.type === "web_search_call"),
+        }
       : undefined,
   };
 }

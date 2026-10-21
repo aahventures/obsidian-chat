@@ -29,6 +29,9 @@
 // `call:` that doesn't parse gets "MOCK: couldn't parse call line: ...", so a
 // scripting slip doesn't look like a plugin that never ran the tool.
 //
+// Each reply's usage.prompt_tokens is the request size in characters / 4, a
+// rough stand-in for a token count that grows with the conversation.
+//
 // Only what you typed is read: the plugin's own blocks before it (the
 // "[Context: ...]" line, which can hold your editor selection, and the
 // selection-scope block) are skipped, so selected text can't script a call.
@@ -186,7 +189,9 @@ function handle(req, res, raw) {
   const message = reply(body.messages, n);
   send(res, 200, {
     choices: [{ message, finish_reason: message.tool_calls ? "tool_calls" : "stop" }],
-    usage: { prompt_tokens: 1, completion_tokens: 1 },
+    // A rough count (about 4 characters a token) that grows with the request,
+    // so the plugin's context meter has something real to show.
+    usage: { prompt_tokens: Math.ceil(raw.length / 4), completion_tokens: 1 },
   });
 }
 

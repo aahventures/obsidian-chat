@@ -7,7 +7,10 @@ import type {
   ContentBlock,
 } from "../types";
 
-const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
+/** Shared with the Models API call in settings.ts. */
+export const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
+export const ANTHROPIC_VERSION = "2023-06-01";
+const ANTHROPIC_API_URL = `${ANTHROPIC_API_BASE}/messages`;
 
 /**
  * Sends a message to the Anthropic Messages API via requestUrl().
@@ -88,7 +91,7 @@ export async function sendAnthropicMessage(
       method: "POST",
       headers: {
         "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_VERSION,
         "content-type": "application/json",
       },
       body: JSON.stringify(body),
@@ -118,12 +121,14 @@ export async function sendAnthropicMessage(
       .map(fromAnthropicBlock)
       .filter((b): b is ContentBlock => b !== null),
     stopReason: data.stop_reason === "end_turn" ? "end_turn" : data.stop_reason,
+    model: typeof data.model === "string" ? data.model : undefined,
     usage: data.usage
       ? {
           inputTokens: data.usage.input_tokens,
           outputTokens: data.usage.output_tokens,
           cacheReadTokens: data.usage.cache_read_input_tokens ?? 0,
           cacheWriteTokens: data.usage.cache_creation_input_tokens ?? 0,
+          multiStep: (data.usage.server_tool_use?.web_search_requests ?? 0) > 0,
         }
       : undefined,
   };
