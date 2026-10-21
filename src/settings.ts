@@ -11,6 +11,8 @@ import {
 import { isCommandName, scanSkills, skillsFolderPath } from "./skills/store";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
+import { rememberContextWindows } from "./api/context-window";
+import { ANTHROPIC_API_BASE, ANTHROPIC_VERSION } from "./api/anthropic";
 
 interface ModelOption {
   value: string;
@@ -443,23 +445,27 @@ async function fetchAnthropicModels(apiKey: string): Promise<ModelOption[]> {
   let response;
   try {
     response = await requestUrl({
-      url: "https://api.anthropic.com/v1/models?limit=100",
+      url: `${ANTHROPIC_API_BASE}/models?limit=100`,
       method: "GET",
       headers: {
         "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
+        "anthropic-version": ANTHROPIC_VERSION,
       },
     });
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : String(e));
   }
 
-  const models = (response.json?.data || [])
-    .filter((m: { type?: string }) => m.type === "model")
-    .map((m: { id: string; display_name?: string }) => ({
-      value: m.id,
-      label: m.display_name || m.id,
-    }))
+  const listed: Array<{ id: string; type?: string; display_name?: string; max_input_tokens?: number }> =
+    (response.json?.data || []).filter((m: { type?: string }) => m.type === "model");
+  // The list carries each model's limit, which saves the context meter a lookup.
+  rememberContextWindows(
+    "anthropic",
+    listed.map((m) => ({ model: m.id, limit: m.max_input_tokens }))
+  );
+
+  const models = listed
+    .map((m) => ({ value: m.id, label: m.display_name || m.id }))
     .sort((a: ModelOption, b: ModelOption) => {
       const da = a.value.match(/(\d{8})/)?.[1] || "";
       const db = b.value.match(/(\d{8})/)?.[1] || "";
