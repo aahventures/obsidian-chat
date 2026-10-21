@@ -8,7 +8,7 @@ import {
   prepareFuzzySearch,
   requestUrl,
 } from "obsidian";
-import { scanSkills, skillsFolderPath } from "./skills/store";
+import { isCommandName, scanSkills, skillsFolderPath } from "./skills/store";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
 
@@ -321,6 +321,11 @@ export class ChatSettingTab extends PluginSettingTab {
       for (const k of skipped) {
         frag.createEl("br");
         frag.append(`Not loaded: ${k.folder}: ${k.reason}.`);
+      }
+      const spaced = skills.filter((k) => !isCommandName(k.name));
+      if (spaced.length > 0) {
+        frag.createEl("br");
+        frag.append(`Can't be typed as /name (the name has a space; ask for it instead): ${spaced.map((k) => k.name).join(", ")}.`);
       }
       return frag;
     };

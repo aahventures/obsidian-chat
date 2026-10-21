@@ -9,6 +9,7 @@ import type {
   PersistedChatState,
 } from "./types";
 import { AgentLoop, isTurnStart, trimToTurns } from "./agent/loop";
+import { uniqueId } from "./util/id";
 
 /** Cap on UI transcript entries kept per session when persisting. */
 const MAX_HISTORY_PER_SESSION = 100;
@@ -54,7 +55,7 @@ export class ChatSession {
   readonly listeners = new Set<SessionListener>();
 
   constructor(app: App, settings: ChatSettings, id?: string, createdAt?: number) {
-    this.id = id ?? `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    this.id = id ?? uniqueId("s");
     this.createdAt = createdAt ?? Date.now();
     this.updatedAt = this.createdAt;
     this.title = UNTITLED;

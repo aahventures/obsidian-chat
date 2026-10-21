@@ -574,6 +574,21 @@ async function useSkill(app: App, input: Record<string, unknown>, skillsFolder: 
     return { result: read.content, isError: false, path: read.file.path, label: `${skill.name}/${relPath(skill, read.file)}` };
   }
 
+  return skillResult(app, skill);
+}
+
+/** A skill's row and what the model gets, for use_skill and for /name alike. */
+export async function skillResult(app: App, skill: Skill): Promise<ToolResult> {
+  const row = { path: skill.file.path, label: skill.name };
+  try {
+    return { result: await skillText(app, skill), isError: false, ...row };
+  } catch (e) {
+    return { result: `Couldn't read the skill (${e instanceof Error ? e.message : String(e)}).`, isError: true, ...row };
+  }
+}
+
+/** What using a skill hands the model: its instructions and the list of its other files. */
+async function skillText(app: App, skill: Skill): Promise<string> {
   const { files, truncated } = listSkill(skill);
   // A draft can be frontmatter only: say so, rather than hand back nothing.
   const parts = [(await readSkillBody(app, skill)) || "(This skill has no instructions beyond its description.)"];
@@ -582,7 +597,12 @@ async function useSkill(app: App, input: Record<string, unknown>, skillsFolder: 
     parts.push(`Other files in this skill (read one with use_skill and file):\n${files.join("\n")}`);
   }
   if (truncated) parts.push(`This skill has more files; only the first ${files.length} are listed.`);
-  return { result: parts.join("\n\n"), isError: false, path: skill.file.path, label: skill.name };
+  return parts.join("\n\n");
+}
+
+/** Why a skipped skill can't be used, for use_skill and /name alike. */
+export function skippedReason(broken: SkippedSkill): string {
+  return `The skill in ${broken.folder} can't be used: ${broken.reason}.`;
 }
 
 /**
@@ -591,8 +611,8 @@ async function useSkill(app: App, input: Record<string, unknown>, skillsFolder: 
  */
 function unknownSkillHint(name: string, skills: Skill[], skipped: SkippedSkill[]): string {
   const q = sameKey(name.trim());
-  const broken = skipped.find((k) => sameKey(k.name) === q);
-  if (broken) return `The skill in ${broken.folder} can't be used: ${broken.reason}. Tell the user, so they can fix it.`;
+  const broken = findSkill(skipped, name);
+  if (broken) return `${skippedReason(broken)} Tell the user, so they can fix it.`;
   if (skills.length === 0) return "The user has no skills that can be used.";
   const words = q.split(/[^\p{L}\p{N}\p{M}]+/u).filter((w) => w.length > 1);
   const closest = skills

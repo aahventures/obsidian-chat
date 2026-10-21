@@ -176,9 +176,30 @@ export async function getSkills(app: App, setting: string): Promise<Skill[]> {
 }
 
 /** A skill by its name only: a second way to name one could pick the wrong skill. */
-export function findSkill(skills: Skill[], name: string): Skill | undefined {
+export function findSkill<T extends { name: string }>(skills: T[], name: string): T | undefined {
   const q = sameKey(name.trim());
   return q ? skills.find((s) => sameKey(s.name) === q) : undefined;
+}
+
+/** Whether a skill can be typed as /name: as in Claude Code, a name is one word. */
+export function isCommandName(name: string): boolean {
+  return !/\s/.test(name);
+}
+
+/** The word a text starts /word with ("" for a lone /), or null when it doesn't start with /. */
+export function commandWord(text: string): string | null {
+  const m = /^\/(\S*)/.exec(text);
+  return m ? m[1] : null;
+}
+
+/**
+ * The skill a message starts /name with: the name, then a space or the end.
+ * "/summarizer" and "/etc/hosts" name no skill. The / menu reads the word
+ * with the same commandWord, so it agrees on what runs.
+ */
+export function skillAtStart<T extends { name: string }>(skills: T[], message: string): T | undefined {
+  const word = commandWord(message);
+  return word ? findSkill(skills, word) : undefined;
 }
 
 /** Which files the [[ menu leaves out: those inside a folder in the skills folder that holds a SKILL.md. */
