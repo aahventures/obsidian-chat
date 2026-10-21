@@ -52,6 +52,7 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 
 - **Where they live**: a folder in your vault (set it in Settings > Skills folder, for example `Skills`; skills are off until you do), one folder per skill, directly in it (as in Claude Code: a skill one folder deeper isn't found). It syncs like any note, so skills work on mobile too. Changes count from your next message; there's nothing to reload. Settings list the skills found, and any that couldn't be read.
 - **Using one**: just ask. The chat sees every skill's name and description (up to about 20,000 characters of them; past that, the rest aren't listed), and loads one whose description matches your request.
+- **Asking for one by name**: start your message with `/` and the skill's name, as in `/write-in-my-voice draft a reply to Sam`. Typing `/` at the start of a message opens a menu of your skills: Tab fills in the highlighted one, and Enter sends what you've typed. The skill goes in with that message, and the chat shows it was used. A `/` that doesn't name a skill (`/etc/hosts`) is sent as you typed it. A name is one word, as in Claude Code: a skill whose name has a space (one with no `name`, named after a folder like `Meeting notes`) can't be typed this way, but you can still ask for it.
 - **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
 ## Install

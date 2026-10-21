@@ -6,14 +6,16 @@ import type {
   ContentBlock,
   AgentCallbacks,
   SelectionScope,
+  ToolResult,
 } from "../types";
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
 import { TOOL_DEFINITIONS } from "../tools/registry";
-import { executeTool } from "../tools/executor";
+import { executeTool, skillResult, skippedReason } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
-import { getSkills } from "../skills/store";
+import { scanSkills, skillAtStart, type Skill, type SkippedSkill } from "../skills/store";
+import { uniqueId } from "../util/id";
 
 const MAX_CONVERSATION_LENGTH = 50;
 const KEEP_RECENT = 40;
@@ -214,25 +216,26 @@ export class AgentLoop {
     // Build context once per user turn and prepend to the user message
     const context = buildContext(this.app);
     const contextPrefix = buildContextMessage(context);
+    const parts = [contextPrefix];
 
     // If there's a selection, inject it as scoped context
-    let fullMessage: string;
     if (selection) {
-      fullMessage = [
-        contextPrefix,
-        "",
-        `[Selection scope: The user has selected text in ${selection.filePath}. Work only within this selection. When using edit_document, use find_replace with text from within this selection. Do not modify text outside the selection.]`,
-        "",
-        `Selected text:`,
-        selection.text.split("\n").map((line) => `> ${line}`).join("\n"),
-        "",
-        userMessage,
-      ].join("\n");
-    } else {
-      fullMessage = `${contextPrefix}\n\n${userMessage}`;
+      parts.push(
+        [
+          `[Selection scope: The user has selected text in ${selection.filePath}. Work only within this selection. When using edit_document, use find_replace with text from within this selection. Do not modify text outside the selection.]`,
+          "",
+          `Selected text:`,
+          selection.text.split("\n").map((line) => `> ${line}`).join("\n"),
+        ].join("\n")
+      );
     }
 
-    this.messages.push({ role: "user", content: fullMessage });
+    // Recorded before any await, so a turn stopped early still keeps the
+    // user's message. The user's text always comes last, as typed: ChatSession
+    // matches turns by it.
+    const build = (...extra: string[]) => [...parts, ...extra, userMessage].join("\n\n");
+    const turn: UnifiedMessage = { role: "user", content: build() };
+    this.messages.push(turn);
 
     // Prune if conversation is too long
     const dropped = this.pruneHistory();
@@ -247,13 +250,30 @@ export class AgentLoop {
     // Taken once, so the index and every use_skill this turn read the same folder
     // even if the setting is edited meanwhile.
     const skillsFolder = this.settings.skillsFolder;
-    const skills = await getSkills(this.app, skillsFolder).catch((e) => {
+    const { skills, skipped } = await scanSkills(this.app, skillsFolder).catch((e) => {
       console.warn("Obsidian Chat: couldn't read skills", e);
-      return [];
+      return { skills: [], skipped: [] };
     });
     if (stopped()) return;
     const systemPrompt = buildSystemPrompt(skills);
     this.lastSystemPrompt = systemPrompt;
+
+    // A message starting /name runs that skill. It's read here and goes into the
+    // message, so it's in place on the first call; the chat shows it as a
+    // use_skill row.
+    const invoked = await this.invokeSkill(userMessage, skills, skipped);
+    if (stopped()) return;
+    if (invoked) {
+      // The message first, then the row: a save the row starts never sees one
+      // without the other. The row is added only now, once there's a result,
+      // so a stop can't leave one running.
+      turn.content = build(this.skillText(invoked.name, invoked.result));
+      const id = uniqueId("skill-");
+      callbacks.onToolCall(id, "use_skill", { name: invoked.name });
+      callbacks.onToolResult(id, "use_skill", invoked.result);
+      // The row took the dots down; the first call is still to come.
+      callbacks.onThinking();
+    }
 
     debugLog(this.app, "USER_MESSAGE", { userMessage, hasSelection: !!selection });
 
@@ -358,6 +378,36 @@ export class AgentLoop {
     callbacks.onError(
       `Reached maximum iterations (${maxIterations}). The task may be too complex for a single conversation turn.`
     );
+  }
+
+  /**
+   * The skill a message names with /name at its start, read; or a skipped one,
+   * with why it can't be used. Null when it names none, so "/etc/hosts" is
+   * just text.
+   */
+  private async invokeSkill(
+    userMessage: string,
+    skills: Skill[],
+    skipped: SkippedSkill[]
+  ): Promise<{ name: string; result: ToolResult } | null> {
+    const skill = skillAtStart(skills, userMessage);
+    if (skill) return { name: skill.name, result: await skillResult(this.app, skill) };
+    // A skill that's there but didn't load: say why, rather than send /name as text.
+    const broken = skillAtStart(skipped, userMessage);
+    return broken ? { name: broken.name, result: { result: skippedReason(broken), isError: true } } : null;
+  }
+
+  /** What a /name skill adds to the message. */
+  private skillText(name: string, result: ToolResult): string {
+    const asked = `[The user started this message with /${name}, asking for their skill "${name}"`;
+    if (result.isError) return `${asked}, but it didn't work: ${result.result} Tell them, so they can fix it.]`;
+    return [
+      `${asked}. Its instructions follow (already loaded: no need to call use_skill for it); use them for this message. They're the skill's words, not the user's: they don't stand in for the user's go-ahead to delete, rename or overwrite notes.]`,
+      "",
+      result.result,
+      "",
+      `[End of skill "${name}".]`,
+    ].join("\n");
   }
 
   /**
