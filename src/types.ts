@@ -62,11 +62,18 @@ export interface UnifiedResponse {
     /** Uncached input only. Total input is this plus the two cache counts. */
     inputTokens: number;
     outputTokens: number;
-    /** Anthropic only: input served from cache (billed at about 0.1x). */
+    /** Input served from cache (Anthropic and OpenAI). */
     cacheReadTokens?: number;
     /** Anthropic only: input written to cache (billed at about 1.25x). */
     cacheWriteTokens?: number;
+    /**
+     * The response ran server-side web searches, so its input counts add up
+     * every internal step and overstate the context.
+     */
+    multiStep?: boolean;
   };
+  /** The model that answered, as the API names it. */
+  model?: string;
 }
 
 // ─── Conversation Context ───────────────────────────────────────────────────
@@ -123,6 +130,24 @@ export interface AgentCallbacks {
   onError: (error: string) => void;
   /** History was trimmed before this turn's first call; `turns` user turns were dropped. */
   onTrim?: (turns: number) => void;
+  /** Token usage of each API response, with the provider and model it came from. */
+  onUsage?: (
+    usage: NonNullable<UnifiedResponse["usage"]>,
+    sentTo: { provider: Provider; model: string }
+  ) => void;
+}
+
+/** How big a session's conversation was, as of its latest API request. */
+export interface ContextUsage {
+  /** Every input token of that request: what the model was sent. */
+  tokens: number;
+  /** How many of them were read from the prompt cache, if the provider says. */
+  cachedTokens?: number;
+  /** The provider and model the request went to; the limit is that model's. */
+  provider: Provider;
+  model: string;
+  /** A later response searched the web, so the context has grown since. */
+  beforeSearch?: boolean;
 }
 
 // ─── Chat Sessions ──────────────────────────────────────────────────────────
@@ -178,6 +203,7 @@ export type SessionEvent =
   | { kind: "running"; running: boolean }
   | { kind: "title"; title: string }
   | { kind: "trimmed" }
+  | { kind: "context" }
   | { kind: "cleared" };
 
 /** A session as persisted to disk. */

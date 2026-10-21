@@ -2,6 +2,7 @@ import { App } from "obsidian";
 import type {
   AgentCallbacks,
   ChatSettings,
+  ContextUsage,
   ChatHistoryEntry,
   SelectionScope,
   SessionEvent,
@@ -42,6 +43,12 @@ export class ChatSession {
   readonly agent: AgentLoop;
 
   // Runtime only, never persisted.
+  /**
+   * Size of the latest request, for the context meter. Unknown until this
+   * session sends one after a load: a saved number could be stale, since saves
+   * cap the history.
+   */
+  context: ContextUsage | null = null;
   running = false;
   /** The question the agent is parked on, if any. */
   pendingQuestion: string | null = null;
@@ -250,10 +257,12 @@ export class SessionStore {
     this.stop(session);
     session.agent.clear();
     session.chatHistory = [];
+    session.context = null;
     session.title = UNTITLED;
     session.touch();
     this.emit(session, { kind: "title", title: session.title });
     this.emit(session, { kind: "cleared" });
+    this.emit(session, { kind: "context" });
     this.emit(session, { kind: "running", running: false });
     this.onChange();
   }
@@ -322,6 +331,29 @@ export class SessionStore {
           text: `History trimmed: ${turns === 1 ? "an" : turns} earlier ${what} no longer sent to the model.`,
         });
         this.emit(session, { kind: "trimmed" });
+      },
+
+      onUsage: (usage, { provider, model }) => {
+        // A response that searched the web reports the input of every search
+        // step added together, which isn't the context's size. The last real
+        // figure stands, marked as older than the search; it keeps its own
+        // model, which the menu names. The next
+        // response without a search brings a new figure.
+        if (usage.multiStep) {
+          if (session.context && !session.context.beforeSearch) {
+            session.context = { ...session.context, beforeSearch: true };
+            this.emit(session, { kind: "context" });
+          }
+          return;
+        }
+        const cached = usage.cacheReadTokens;
+        session.context = {
+          tokens: usage.inputTokens + (cached ?? 0) + (usage.cacheWriteTokens ?? 0),
+          cachedTokens: cached,
+          provider,
+          model,
+        };
+        this.emit(session, { kind: "context" });
       },
     };
   }
