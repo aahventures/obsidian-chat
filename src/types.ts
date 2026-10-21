@@ -130,11 +130,19 @@ export interface AgentCallbacks {
   onError: (error: string) => void;
   /** History was trimmed before this turn's first call; `turns` user turns were dropped. */
   onTrim?: (turns: number) => void;
+  /** The skills this turn's message named as /name that ran, for its chips. */
+  onSkillsNamed?: (skills: NamedSkill[]) => void;
   /** Token usage of each API response, with the provider and model it came from. */
   onUsage?: (
     usage: NonNullable<UnifiedResponse["usage"]>,
     sentTo: { provider: Provider; model: string }
   ) => void;
+}
+
+/** A skill a message ran by naming it, as its chip shows it. */
+export interface NamedSkill {
+  name: string;
+  description: string;
 }
 
 /** How big a session's conversation was, as of its latest API request. */
@@ -169,6 +177,11 @@ export interface ChatHistoryEntry {
   text?: string;
   /** On a "user" entry: the editor selection sent along with the message. */
   selection?: SelectionScope;
+  /**
+   * On a "user" entry: the skills it named as /name that ran. Recorded when
+   * they ran, so its chips show what ran then, whatever the skills are now.
+   */
+  skills?: NamedSkill[];
   /** The tool_use id, matching a result back to its call. */
   toolId?: string;
   toolName?: string;
@@ -203,6 +216,7 @@ export type SessionEvent =
   | { kind: "running"; running: boolean }
   | { kind: "title"; title: string }
   | { kind: "trimmed" }
+  | { kind: "user-skills"; skills: NamedSkill[] }
   | { kind: "context" }
   | { kind: "cleared" };
 

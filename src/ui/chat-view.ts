@@ -255,7 +255,7 @@ export class ObsidianChatView extends ItemView {
       if (i === rememberedFrom && i > 0) chat.addDivider();
       switch (entry.type) {
         case "user":
-          chat.addUserMessage(entry.text ?? "", entry.selection);
+          chat.addUserMessage(entry.text ?? "", entry.selection, entry.skills);
           break;
         case "assistant":
           chat.addAssistantMessage(entry.text ?? "");
@@ -291,7 +291,7 @@ export class ObsidianChatView extends ItemView {
     switch (event.kind) {
       case "message": {
         const entry = event.entry;
-        if (entry.type === "user") chat.addUserMessage(entry.text ?? "", entry.selection);
+        if (entry.type === "user") chat.addUserMessage(entry.text ?? "", entry.selection, entry.skills);
         else if (entry.type === "assistant") chat.addAssistantMessage(entry.text ?? "");
         else if (entry.type === "error") chat.addError(entry.text ?? "");
         else if (entry.type === "notice") chat.addNotice(entry.text ?? "");
@@ -321,6 +321,9 @@ export class ObsidianChatView extends ItemView {
           chat.setInputEnabled(true);
           chat.focus();
         }
+        break;
+      case "user-skills":
+        chat.setLastUserSkills(event.skills);
         break;
       case "trimmed": {
         // Redraw so the line moves down to the oldest turn still sent.
