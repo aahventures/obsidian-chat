@@ -14,7 +14,7 @@ import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool, skillResult, skippedReason } from "../tools/executor";
 import { buildContext } from "./context";
 import { buildSystemPrompt, buildContextMessage } from "./system-prompt";
-import { scanSkills, skillAtStart, type Skill, type SkippedSkill } from "../skills/store";
+import { scanSkills, skillAtStart, skillsFolderPath, type Skill, type SkippedSkill } from "../skills/store";
 import { uniqueId } from "../util/id";
 
 const MAX_CONVERSATION_LENGTH = 50;
@@ -250,12 +250,14 @@ export class AgentLoop {
     // Taken once, so the index and every use_skill this turn read the same folder
     // even if the setting is edited meanwhile.
     const skillsFolder = this.settings.skillsFolder;
-    const { skills, skipped } = await scanSkills(this.app, skillsFolder).catch((e) => {
+    const { root, skills, skipped } = await scanSkills(this.app, skillsFolder).catch((e) => {
       console.warn("Obsidian Chat: couldn't read skills", e);
-      return { skills: [], skipped: [] };
+      return { root: null, skills: [], skipped: [] };
     });
     if (stopped()) return;
-    const systemPrompt = buildSystemPrompt(skills);
+    // The folder as it is in the vault (the setting is matched ignoring case), or as
+    // set when it isn't there yet: create_file makes it, so the first skill can be made.
+    const systemPrompt = buildSystemPrompt(skills, root?.path ?? skillsFolderPath(skillsFolder));
     this.lastSystemPrompt = systemPrompt;
 
     // A message starting /name runs that skill. It's read here and goes into the

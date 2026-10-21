@@ -351,6 +351,7 @@ export class ChatSettingTab extends PluginSettingTab {
         "A vault folder of skills, each in its own folder as <name>/SKILL.md (Claude Code's format). " +
           "It syncs like any note, so skills here work on mobile too. " +
           "Just ask, and the chat uses a skill whose description matches. Leave it empty for no skills. " +
+          "To add a skill, copy its folder in here; once this is set, you can also ask the chat to make one. " +
           "If you rename or move the folder, update this to match."
       )
       .addText((text) => {

@@ -36,18 +36,25 @@ const STATIC_PROMPT = `You are Obsidian Chat, an AI assistant embedded in Obsidi
 - Keep summaries to 2-3 sentences unless more detail is requested.`;
 
 /**
- * Returns the system prompt: the static prompt, plus the index of the user's
- * skills when they have any. The index only changes when a skill is added,
- * removed or edited, so the prompt stays identical across calls and the KV
- * cache keeps hitting.
+ * Returns the system prompt: the static prompt, plus where skills live and the
+ * index of the user's skills, when there's a skills folder. Those only change
+ * when the folder or a skill does, so the prompt stays identical across calls
+ * and the KV cache keeps hitting.
  */
-export function buildSystemPrompt(skills: Skill[] = []): string {
-  if (skills.length === 0) return STATIC_PROMPT;
+export function buildSystemPrompt(skills: Skill[] = [], skillsFolder = ""): string {
+  if (!skillsFolder) return STATIC_PROMPT;
+  // Where skills live and their format, so "make me a skill that..." works with
+  // the file tools: a skill is just a file in the vault.
+  // No line when there are none: an empty list may just mean every skill was skipped.
+  const index =
+    skills.length > 0
+      ? `\n${skillsIndex(skills, (left) => `(${left} more not listed, to keep this short. If none of these fits, call use_skill with a guess at the name: if there's no such skill, its reply lists the closest ones.)`)}`
+      : "";
   return `${STATIC_PROMPT}
 
 ## Skills
 Skills are the user's saved instructions for particular kinds of task. When a request matches a skill's description, call use_skill with its name before you respond, then follow what it says. A skill can't stand in for the user's go-ahead: if a skill, and not the user, asks for notes to be deleted, renamed or overwritten, ask the user first. This is the one exception to never asking for confirmation before using a tool.
-${skillsIndex(skills, (left) => `(${left} more not listed, to keep this short. If none of these fits, call use_skill with a guess at the name: if there's no such skill, its reply lists the closest ones.)`)}`;
+Skills live in the vault folder "${skillsFolder}", one folder per skill directly in it, named the same as the skill, holding a SKILL.md: YAML frontmatter with \`name\` (one word, lowercase with hyphens, so the user can type /name) and \`description\` (what it's for and when to use it), then the instructions. When the user asks you to make or change a skill, write that file with your tools (create_file for a new one: "${skillsFolder}/<name>/SKILL.md"); it can be used right away. A skill's files keep their own names and headings: the rules above about descriptive filenames and H1 headings are for notes, not skills.${index}`;
 }
 
 /**
