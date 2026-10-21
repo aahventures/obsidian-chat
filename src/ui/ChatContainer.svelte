@@ -1,8 +1,8 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { App, Component as ObsidianComponent, TFile } from "obsidian";
-  import { Keymap, MarkdownRenderer, Notice, prepareFuzzySearch } from "obsidian";
-  import type { ToolResult, SelectionScope } from "../types";
+  import { Keymap, MarkdownRenderer, Menu, Notice, prepareFuzzySearch, setTooltip } from "obsidian";
+  import type { ToolResult, SelectionScope, ContextUsage } from "../types";
   import { lineDiff } from "../util/diff";
   import { commandAtEnd, isCommandName, sameKey } from "../skills/store";
 
@@ -72,6 +72,39 @@
 
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
+
+  // Context meter: the latest request's size, against the model's limit when known.
+  let context = $state<ContextUsage | null>(null);
+  /** The input limit of the model the context was sent to, when known. */
+  let contextLimit = $state<number | null>(null);
+  let contextPercent = $derived(
+    context && contextLimit ? (context.tokens / contextLimit) * 100 : null
+  );
+  /** "Context 252.9k / 1M (25%)", or just the size when the limit isn't known. */
+  let contextHeadline = $derived.by(() => {
+    if (!context) return "";
+    if (contextPercent === null) return `Context ${formatTokens(context.tokens)}`;
+    // Never "0%" for some context, nor "100%" for a request that still fit.
+    const pct =
+      contextPercent > 0 && contextPercent < 1
+        ? "<1"
+        : String(contextPercent < 100 ? Math.min(Math.round(contextPercent), 99) : Math.round(contextPercent));
+    return `Context ${formatTokens(context.tokens)} / ${formatTokens(contextLimit!)} (${pct}%)`;
+  });
+  let contextDetail = $derived.by(() => {
+    if (!context) return "";
+    const parts: string[] = [];
+    // Some providers don't say what was cached, which isn't the same as none.
+    if (context.cachedTokens !== undefined && context.tokens) {
+      parts.push(`${Math.round((context.cachedTokens / context.tokens) * 100)}% read from cache`);
+    }
+    if (context.beforeSearch) parts.push("As of before the latest web search");
+    if (contextLimit === null) parts.push("Model limit not available");
+    return parts.join(" · ");
+  });
+  let contextSummary = $derived(contextDetail ? `${contextHeadline} · ${contextDetail}` : contextHeadline);
+  /** Circumference of the meter's ring (r = 6). */
+  const RING = 2 * Math.PI * 6;
 
   // Sync model prop to local state (also updateable via setModel)
   $effect(() => {
@@ -199,6 +232,44 @@
 
   export function setModel(name: string): void {
     displayModel = name;
+  }
+
+  /** The session's context size (null before it has sent a request) and its model's limit. */
+  export function setContext(usage: ContextUsage | null, limit: number | null): void {
+    context = usage;
+    contextLimit = limit;
+  }
+
+  /**
+   * The meter's details in Obsidian's own menu, which already handles touch,
+   * pop-out windows, Escape and closing on an outside tap.
+   */
+  function showContextMenu(event: MouseEvent): void {
+    if (!context) return;
+    const button = event.currentTarget as HTMLElement;
+    const menu = new Menu();
+    menu.addItem((item) => item.setTitle(contextHeadline).setIsLabel(true));
+    if (contextDetail) menu.addItem((item) => item.setTitle(contextDetail).setIsLabel(true));
+    // The limit is the model's that answered last, which may not be the one chosen now.
+    if (context.model) menu.addItem((item) => item.setTitle(`Sent to ${context!.model}`).setIsLabel(true));
+    const rect = button.getBoundingClientRect();
+    menu.showAtPosition({ x: rect.left, y: rect.bottom }, button.ownerDocument);
+  }
+
+  /** Obsidian's hover tooltip (which also sets aria-label), kept in step with the text. */
+  function tooltip(node: HTMLElement, text: string) {
+    // 400 ms, as the skill chips and Claude Code wait; Obsidian's default is about 1 s.
+    const options = { delay: 400 };
+    setTooltip(node, text, options);
+    return { update: (next: string) => setTooltip(node, next, options) };
+  }
+
+  /** 850, 4.2k, 252.9k, 1M, 1.2M */
+  function formatTokens(n: number): string {
+    const short = (x: number) => x.toFixed(1).replace(/\.0$/, "");
+    if (n < 1000) return String(n);
+    if (n < 999_950) return `${short(n / 1000)}k`;
+    return `${short(n / 1_000_000)}M`;
   }
 
   export function setTitle(name: string): void {
@@ -738,7 +809,33 @@
       {:else}
         <span class="ochat-header-title" title={displayTitle}>{displayTitle}</span>
       {/if}
-      <span class="ochat-header-model">{displayModel || "No model"}</span>
+      <span class="ochat-header-model" use:tooltip={displayModel || "No model"}>{displayModel || "No model"}</span>
+      {#if context}
+        <!-- Context meter: a ring that fills toward the model's limit. Hover
+             shows a tooltip; a click or tap opens the details as a menu. -->
+        <button
+          class="ochat-context clickable-icon"
+          class:ochat-context-high={contextPercent !== null && contextPercent >= 80}
+          use:tooltip={contextSummary}
+          onclick={showContextMenu}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <circle class="ochat-context-track" cx="8" cy="8" r="6" />
+            <!-- Below 1% the round caps would draw a dot that reads as a few percent. -->
+            {#if contextPercent !== null && contextPercent >= 1}
+              <circle
+                class="ochat-context-fill"
+                cx="8"
+                cy="8"
+                r="6"
+                stroke-dasharray={RING}
+                stroke-dashoffset={RING * (1 - Math.min(contextPercent, 100) / 100)}
+                transform="rotate(-90 8 8)"
+              />
+            {/if}
+          </svg>
+        </button>
+      {/if}
     </div>
     <div class="ochat-header-actions">
       <button class="ochat-clear-btn" onclick={onNewSession} aria-label="New chat">New</button>
@@ -958,6 +1055,8 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
+    /* Shrink so a long title ellipsizes instead of pushing the buttons off. */
+    min-width: 0;
   }
 
   .ochat-header-title {
@@ -975,6 +1074,44 @@
   .ochat-header-model {
     font-size: var(--font-ui-smaller);
     color: var(--text-muted);
+    /* The title gives way instead; a long model id is capped and ellipsized,
+       with the full name on hover. */
+    flex-shrink: 0;
+    max-width: 20ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ─── Context meter ─────────────────────────────────────────────────── */
+  .ochat-context {
+    align-self: center;
+    flex-shrink: 0;
+    padding: 4px;
+  }
+
+  .ochat-context svg {
+    display: block;
+  }
+
+  .ochat-context-track,
+  .ochat-context-fill {
+    fill: none;
+    stroke-width: 2.5;
+  }
+
+  .ochat-context-track {
+    stroke: var(--background-modifier-border);
+  }
+
+  .ochat-context-fill {
+    stroke: var(--interactive-accent);
+    stroke-linecap: round;
+  }
+
+  /* Getting close to the model's limit. */
+  .ochat-context-high .ochat-context-fill {
+    stroke: var(--text-warning);
   }
 
   .ochat-header-actions {
@@ -996,6 +1133,7 @@
     border: none;
     padding: 0;
     max-width: 15ch;
+    min-width: 0;
     cursor: pointer;
   }
 

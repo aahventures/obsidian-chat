@@ -289,10 +289,13 @@ export class AgentLoop {
       // The first round's was sent before the skills scan.
       if (i > 0) callbacks.onThinking();
 
+      // One fixed copy per request: settings can change while it's out, and a
+      // rate-limit retry would otherwise read them again.
+      const sent = { ...this.settings };
       let response;
       try {
         response = await sendMessage(
-          this.settings,
+          sent,
           this.messages,
           TOOL_DEFINITIONS,
           systemPrompt,
@@ -300,7 +303,7 @@ export class AgentLoop {
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        debugLog(this.app, "API_ERROR", { error: msg, model: this.settings.model, provider: this.settings.provider });
+        debugLog(this.app, "API_ERROR", { error: msg, model: sent.model, provider: sent.provider });
         // A stopped run's request can still fail later; its error belongs to
         // no one now, so don't show it in the current turn.
         if (stopped()) return;
@@ -311,6 +314,14 @@ export class AgentLoop {
       debugLog(this.app, "API_RESPONSE", { stopReason: response.stopReason, contentTypes: response.content.map(b => b.type), usage: response.usage });
 
       if (stopped()) return;
+      // The API's own name for the model beats the setting, which may be empty
+      // (the adapters then fall back to a default).
+      if (response.usage) {
+        callbacks.onUsage?.(response.usage, {
+          provider: sent.provider,
+          model: response.model || sent.model,
+        });
+      }
 
       // Process response content blocks
       const toolCalls: ContentBlock[] = [];

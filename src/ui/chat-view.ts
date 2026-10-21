@@ -6,6 +6,7 @@ import { getSkills, skillFileFilter } from "../skills/store";
 import type { ChatSession } from "../sessions";
 import type { SelectionScope, SessionEvent } from "../types";
 import { getModelDisplayName } from "../settings";
+import { contextWindowOf, onContextWindowsChange } from "../api/context-window";
 
 export const VIEW_TYPE_CHAT = "ochat-view";
 
@@ -26,6 +27,7 @@ export class ObsidianChatView extends ItemView {
   /** The session on screen. */
   private sessionId: string | null = null;
   private unsubscribe: (() => void) | null = null;
+  private unsubscribeLimits: (() => void) | null = null;
   /** Maps a tool_use id to the row rendering it. */
   private toolRows = new Map<string, number>();
   private readyResolve: (() => void) | null = null;
@@ -104,6 +106,9 @@ export class ObsidianChatView extends ItemView {
 
     this.sessionId = null; // so bindTo() doesn't treat it as already bound
     this.bindTo(session.id);
+    // Refreshing the settings tab's model list can report a model's exact limit.
+    this.unsubscribeLimits?.();
+    this.unsubscribeLimits = onContextWindowsChange(() => this.refreshContext());
     this.readyResolve?.();
     this.readyResolve = null;
   }
@@ -136,6 +141,7 @@ export class ObsidianChatView extends ItemView {
       this.applyEvent(event)
     );
     this.refreshHeader();
+    this.refreshContext();
   }
 
   /**
@@ -151,6 +157,8 @@ export class ObsidianChatView extends ItemView {
     // Deliberately doesn't stop the session: a turn outlives its view.
     this.unsubscribe?.();
     this.unsubscribe = null;
+    this.unsubscribeLimits?.();
+    this.unsubscribeLimits = null;
     if (this.chatContainer) {
       unmount(this.chatContainer);
       this.chatContainer = undefined;
@@ -192,6 +200,16 @@ export class ObsidianChatView extends ItemView {
   }
 
   // ─── Rendering ────────────────────────────────────────────────────────
+
+  /** Show the session's context size and its model's limit, if it has sent a request. */
+  private refreshContext(): void {
+    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
+    const context = session?.context ?? null;
+    this.chatContainer?.setContext(
+      context,
+      context ? contextWindowOf(context.provider, context.model) : null
+    );
+  }
 
   private refreshSwitcher(): void {
     const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
@@ -293,6 +311,9 @@ export class ObsidianChatView extends ItemView {
       case "cleared":
         chat.clearMessages();
         this.toolRows.clear();
+        break;
+      case "context":
+        this.refreshContext();
         break;
       case "title":
         this.refreshSwitcher();

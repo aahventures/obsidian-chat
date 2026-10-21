@@ -6,6 +6,7 @@ import type {
   UnifiedResponse,
   ContentBlock,
 } from "../types";
+import { splitCachedInput } from "./usage";
 
 /**
  * Sends a message to any OpenAI Chat Completions-compatible API (DeepSeek,
@@ -163,11 +164,27 @@ export async function sendCustomMessage(
   return {
     content,
     stopReason,
+    model: typeof data.model === "string" ? data.model : undefined,
     usage: data.usage
       ? {
-          inputTokens: data.usage.prompt_tokens || 0,
+          // OpenAI-style servers report cached input in prompt_tokens_details,
+          // DeepSeek as prompt_cache_hit_tokens; others don't say. The larger
+          // wins, so a placeholder 0 in one can't hide the other.
+          ...splitCachedInput(
+            data.usage.prompt_tokens,
+            largestCount(
+              data.usage.prompt_tokens_details?.cached_tokens,
+              data.usage.prompt_cache_hit_tokens
+            )
+          ),
           outputTokens: data.usage.completion_tokens || 0,
         }
       : undefined,
   };
+}
+
+/** The larger of the numbers given, or undefined if none is a number. */
+function largestCount(...values: unknown[]): number | undefined {
+  const counts = values.filter((v): v is number => typeof v === "number");
+  return counts.length ? Math.max(...counts) : undefined;
 }
