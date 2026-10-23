@@ -601,7 +601,11 @@ export default class ChatPlugin extends Plugin {
 
     // Update every chat pane's header with the new model name
     const modelName = getModelDisplayName(this.settings.provider, resolveModel(this.settings));
-    for (const view of this.getChatViews()) view.updateModel(modelName);
+    for (const view of this.getChatViews()) {
+      view.updateModel(modelName);
+      // The meter fills toward the compaction threshold, which may have changed.
+      view.refreshContext();
+    }
   }
 
   /** Load the correct API key when provider changes */

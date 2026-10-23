@@ -51,6 +51,22 @@ export function compactionThreshold(provider: Provider, model: string, compactAt
   return Math.max(MIN_COMPACT_AT, Math.min(compactAt, limit ?? Infinity));
 }
 
+/** What the context meter measures a chat against. */
+export interface ContextBudget {
+  /** What the ring fills toward: where it compacts, or else the model's limit. */
+  limit: number | null;
+  /** `limit` is where the provider compacts, not the model's limit. */
+  compacts: boolean;
+  /** The model's own input limit, when known. */
+  modelLimit: number | null;
+}
+
+export function contextBudget(provider: Provider, model: string, compactAt: number): ContextBudget {
+  const modelLimit = contextWindowOf(provider, model);
+  const threshold = compactionThreshold(provider, model, compactAt);
+  return { limit: threshold ?? modelLimit, compacts: threshold !== null, modelLimit };
+}
+
 /** The message a compaction block opens, if any: Anthropic's summary of everything before it. */
 export function isSummary(message: UnifiedMessage | undefined): boolean {
   return Array.isArray(message?.content) && message.content[0]?.type === "compaction";

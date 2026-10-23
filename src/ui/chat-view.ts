@@ -7,7 +7,8 @@ import type { ChatSession } from "../sessions";
 import type { SelectionScope, SessionEvent } from "../types";
 import { resolveModel } from "../types";
 import { getModelDisplayName } from "../settings";
-import { contextWindowOf, onContextWindowsChange } from "../api/context-window";
+import { onContextWindowsChange } from "../api/context-window";
+import { contextBudget } from "../api/compaction";
 
 export const VIEW_TYPE_CHAT = "ochat-view";
 
@@ -202,13 +203,16 @@ export class ObsidianChatView extends ItemView {
 
   // ─── Rendering ────────────────────────────────────────────────────────
 
-  /** Show the session's context size and its model's limit, if it has sent a request. */
-  private refreshContext(): void {
+  /**
+   * Show the session's context size, if it has sent a request, against where it
+   * compacts or its model's limit. Public, as the threshold is a setting.
+   */
+  refreshContext(): void {
     const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
     const context = session?.context ?? null;
     this.chatContainer?.setContext(
       context,
-      context ? contextWindowOf(context.provider, context.model) : null
+      context ? contextBudget(context.provider, context.model, this.plugin.settings.compactAt) : null
     );
   }
 

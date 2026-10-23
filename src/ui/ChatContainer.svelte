@@ -3,6 +3,7 @@
   import type { App, Component as ObsidianComponent, TFile } from "obsidian";
   import { Keymap, MarkdownRenderer, Menu, Notice, Platform, displayTooltip, parseLinktext, prepareFuzzySearch, setTooltip } from "obsidian";
   import type { NamedSkill, ToolResult, SelectionScope, ContextUsage } from "../types";
+  import type { ContextBudget } from "../api/compaction";
   import { lineDiff } from "../util/diff";
   import { commandAtEnd, isCommandName, sameKey, skillMentions } from "../skills/store";
 
@@ -75,10 +76,11 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // Context meter: the latest request's size, against the model's limit when known.
+  // Context meter: the latest request's size, against where that model's chat
+  // compacts, or else the model's limit when known.
   let context = $state<ContextUsage | null>(null);
-  /** The input limit of the model the context was sent to, when known. */
-  let contextLimit = $state<number | null>(null);
+  let budget = $state<ContextBudget | null>(null);
+  let contextLimit = $derived(budget?.limit ?? null);
   let contextPercent = $derived(
     context && contextLimit ? (context.tokens / contextLimit) * 100 : null
   );
@@ -101,7 +103,12 @@
       parts.push(`${Math.round((context.cachedTokens / context.tokens) * 100)}% read from cache`);
     }
     if (context.beforeSearch) parts.push("As of before the latest web search");
-    if (contextLimit === null) parts.push("Model limit not available");
+    if (budget?.compacts && contextLimit) {
+      const limit = budget.modelLimit ? ` (model limit ${formatTokens(budget.modelLimit)})` : "";
+      parts.push(`Compacts at ${formatTokens(contextLimit)}${limit}`);
+    } else if (contextLimit === null) {
+      parts.push("Model limit not available");
+    }
     return parts.join(" · ");
   });
   let contextSummary = $derived(contextDetail ? `${contextHeadline} · ${contextDetail}` : contextHeadline);
@@ -245,10 +252,10 @@
     displayModel = name;
   }
 
-  /** The session's context size (null before it has sent a request) and its model's limit. */
-  export function setContext(usage: ContextUsage | null, limit: number | null): void {
+  /** The session's context size (null before it has sent a request) and what to measure it against. */
+  export function setContext(usage: ContextUsage | null, against: ContextBudget | null): void {
     context = usage;
-    contextLimit = limit;
+    budget = against;
   }
 
   /**
