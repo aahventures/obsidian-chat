@@ -6,6 +6,7 @@ import type {
   UnifiedResponse,
   ContentBlock,
 } from "../types";
+import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
 
 /**
@@ -22,7 +23,7 @@ export async function sendCustomMessage(
   systemPrompt: string
 ): Promise<UnifiedResponse> {
   const baseUrl = (settings.baseUrl || "https://api.deepseek.com").replace(/\/+$/, "");
-  const model = settings.model || "deepseek-chat";
+  const model = resolveModel(settings);
 
   const apiMessages: Record<string, unknown>[] = [];
 
