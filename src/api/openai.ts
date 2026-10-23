@@ -9,6 +9,7 @@ import type {
 } from "../types";
 import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
+import { summariesAsText } from "./compaction";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
 
@@ -124,7 +125,8 @@ function buildCurrentTurnInput(
 
   // If no previous response (first call), include all messages
   if (!state.previousResponseId) {
-    for (const msg of messages) {
+    // An Anthropic summary from earlier in the chat goes as text.
+    for (const msg of summariesAsText(messages)) {
       // Assistant turns are stored as content blocks, never plain strings, so
       // reading only string content would drop every reply. Tool calls and
       // results are left out rather than translated; the text around them
