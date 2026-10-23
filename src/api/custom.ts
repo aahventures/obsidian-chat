@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
+import { summariesAsText } from "./compaction";
 
 /**
  * Sends a message to any OpenAI Chat Completions-compatible API (DeepSeek,
@@ -32,8 +33,9 @@ export async function sendCustomMessage(
     apiMessages.push({ role: "system", content: systemPrompt });
   }
 
-  // Convert unified messages to OpenAI Chat Completions format
-  for (const msg of messages) {
+  // Convert unified messages to OpenAI Chat Completions format. An Anthropic
+  // summary from earlier in the chat goes as text.
+  for (const msg of summariesAsText(messages)) {
     if (typeof msg.content === "string") {
       apiMessages.push({ role: msg.role, content: msg.content });
     } else {

@@ -583,6 +583,10 @@ export default class ChatPlugin extends Plugin {
     // default, not Claude's, which would go to OpenAI or a custom endpoint.
     this.settings.model = resolveModel(this.settings);
 
+    if (typeof this.settings.compactAt !== "number" || !(this.settings.compactAt > 0)) {
+      this.settings.compactAt = DEFAULT_SETTINGS.compactAt;
+    }
+
     // Load API key for the current provider from SecretStorage
     this.settings.apiKey = this.loadApiKey(this.settings.provider);
   }

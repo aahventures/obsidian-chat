@@ -9,13 +9,11 @@ import type {
   SessionSnapshot,
   PersistedChatState,
 } from "./types";
-import { AgentLoop, isTurnStart, trimToTurns } from "./agent/loop";
+import { AgentLoop, isTurnStart } from "./agent/loop";
 import { uniqueId } from "./util/id";
 
 /** Cap on UI transcript entries kept per session when persisting. */
 const MAX_HISTORY_PER_SESSION = 100;
-/** Cap on API messages kept per session when persisting. */
-const MAX_AGENT_MESSAGES_PER_SESSION = 80;
 /**
  * Cap on retained sessions, so `chat-state.json` can't grow forever.
  * Least-recently-used sessions are evicted first; a session a pane is
@@ -27,6 +25,9 @@ const MAX_SESSIONS = 20;
 const MAX_TITLE_LENGTH = 40;
 
 const UNTITLED = "New chat";
+
+/** How a trim notice starts, so a new trim replaces it and leaves other notices be. */
+const TRIM_NOTICE = "History trimmed:";
 
 type SessionListener = (event: SessionEvent) => void;
 
@@ -100,7 +101,8 @@ export class ChatSession {
    * match and are passed over.
    */
   get rememberedFrom(): number {
-    if (!this.agent.sendsFullHistory) return 0;
+    // A summary covers everything before it, so the model has it all, in brief.
+    if (!this.agent.sendsFullHistory || this.agent.startsFromSummary) return 0;
     const turns = this.agent
       .exportMessages()
       .filter(isTurnStart)
@@ -128,7 +130,10 @@ export class ChatSession {
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
       chatHistory: this.chatHistory.slice(-MAX_HISTORY_PER_SESSION),
-      agentMessages: trimToTurns(this.agent.exportMessages(), MAX_AGENT_MESSAGES_PER_SESSION),
+      // As is: it's what the next request sends, and the loop keeps it bounded
+      // (trimmed, or compacted by Anthropic). A cut here would lose context
+      // the model still had, or the summary standing in for the rest.
+      agentMessages: this.agent.exportMessages(),
       openai: this.agent.exportOpenAIState(),
     };
   }
@@ -333,13 +338,23 @@ export class SessionStore {
 
       onTrim: (turns) => {
         // Only the latest trim is worth a line; the divider tracks the rest.
-        session.chatHistory = session.chatHistory.filter((e) => e.type !== "notice");
+        session.chatHistory = session.chatHistory.filter(
+          (e) => !(e.type === "notice" && e.text?.startsWith(TRIM_NOTICE))
+        );
         const what = turns === 1 ? "message of yours is" : `messages of yours are`;
         this.append(session, {
           type: "notice",
-          text: `History trimmed: ${turns === 1 ? "an" : turns} earlier ${what} no longer sent to the model.`,
+          text: `${TRIM_NOTICE} ${turns === 1 ? "an" : turns} earlier ${what} no longer sent to the model.`,
         });
         this.emit(session, { kind: "trimmed" });
+      },
+
+      onCompacted: () => {
+        this.emit(session, { kind: "thinking", on: false });
+        this.append(session, {
+          type: "notice",
+          text: "Compacted: the model now has a summary of the conversation above in place of the full text.",
+        });
       },
 
       onUsage: (usage, { provider, model }) => {
