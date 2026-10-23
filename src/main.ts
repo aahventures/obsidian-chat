@@ -10,7 +10,7 @@ import {
   type WorkspaceLeaf,
 } from "obsidian";
 import type { ChatSettings, SelectionScope } from "./types";
-import { DEFAULT_SETTINGS } from "./types";
+import { DEFAULT_SETTINGS, resolveModel } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore, fromForkSessionsFile } from "./sessions";
@@ -579,10 +579,9 @@ export default class ChatPlugin extends Plugin {
     const saved = (await this.loadData()) || {};
     this.settings = Object.assign({}, DEFAULT_SETTINGS, saved);
 
-    // Fall back to default model if saved model is empty
-    if (!this.settings.model) {
-      this.settings.model = DEFAULT_SETTINGS.model;
-    }
+    // An empty model (saved after a provider change) becomes that provider's
+    // default, not Claude's, which would go to OpenAI or a custom endpoint.
+    this.settings.model = resolveModel(this.settings);
 
     // Load API key for the current provider from SecretStorage
     this.settings.apiKey = this.loadApiKey(this.settings.provider);
@@ -597,7 +596,7 @@ export default class ChatPlugin extends Plugin {
     await this.saveData(toSave);
 
     // Update every chat pane's header with the new model name
-    const modelName = getModelDisplayName(this.settings.provider, this.settings.model);
+    const modelName = getModelDisplayName(this.settings.provider, resolveModel(this.settings));
     for (const view of this.getChatViews()) view.updateModel(modelName);
   }
 
