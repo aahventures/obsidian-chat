@@ -8,6 +8,7 @@ import type {
   SelectionScope,
   ToolResult,
 } from "../types";
+import { resolveModel } from "../types";
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
 import { TOOL_DEFINITIONS } from "../tools/registry";
@@ -156,7 +157,7 @@ export class AgentLoop {
       ``,
       `**Date:** ${new Date().toISOString()}`,
       `**Provider:** ${this.settings.provider}`,
-      `**Model:** ${this.settings.model}`,
+      `**Model:** ${resolveModel(this.settings)}`,
       ``,
       `## System Prompt`,
       ``,
@@ -306,7 +307,7 @@ export class AgentLoop {
         );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        debugLog(this.app, "API_ERROR", { error: msg, model: sent.model, provider: sent.provider });
+        debugLog(this.app, "API_ERROR", { error: msg, model: resolveModel(sent), provider: sent.provider });
         // A stopped run's request can still fail later; its error belongs to
         // no one now, so don't show it in the current turn.
         if (stopped()) return;
@@ -317,12 +318,11 @@ export class AgentLoop {
       debugLog(this.app, "API_RESPONSE", { stopReason: response.stopReason, contentTypes: response.content.map(b => b.type), usage: response.usage });
 
       if (stopped()) return;
-      // The API's own name for the model beats the setting, which may be empty
-      // (the adapters then fall back to a default).
+      // The API's own name for the model beats the one it was sent to.
       if (response.usage) {
         callbacks.onUsage?.(response.usage, {
           provider: sent.provider,
-          model: response.model || sent.model,
+          model: response.model || resolveModel(sent),
         });
       }
 

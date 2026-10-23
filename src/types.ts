@@ -15,10 +15,25 @@ export interface ChatSettings {
   skillsFolder: string;
 }
 
+/** The model a request goes to when the setting is empty (as after a provider change). */
+const DEFAULT_MODELS: Record<Provider, string> = {
+  anthropic: "claude-sonnet-4-6",
+  openai: "gpt-5.3-codex",
+  custom: "deepseek-chat",
+};
+
+/**
+ * The model a request with these settings goes to. Everything that depends on
+ * the model (the adapters, the trim, the meter) asks this, so they agree.
+ */
+export function resolveModel(settings: Pick<ChatSettings, "provider" | "model">): string {
+  return settings.model || DEFAULT_MODELS[settings.provider];
+}
+
 export const DEFAULT_SETTINGS: ChatSettings = {
   provider: "anthropic",
   apiKey: "",
-  model: "claude-sonnet-4-6",
+  model: DEFAULT_MODELS.anthropic,
   maxIterations: 20,
   enableWebSearch: true,
   baseUrl: "",

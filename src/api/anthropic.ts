@@ -6,6 +6,7 @@ import type {
   UnifiedResponse,
   ContentBlock,
 } from "../types";
+import { resolveModel } from "../types";
 
 /** Shared with the Models API call in settings.ts. */
 export const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
@@ -26,7 +27,7 @@ export async function sendAnthropicMessage(
   tools: UnifiedToolDef[],
   systemPrompt: string
 ): Promise<UnifiedResponse> {
-  const model = settings.model || "claude-sonnet-4-6";
+  const model = resolveModel(settings);
   const body: Record<string, unknown> = {
     model,
     max_tokens: 16384,

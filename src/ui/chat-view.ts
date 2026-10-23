@@ -5,6 +5,7 @@ import ChatContainer from "./ChatContainer.svelte";
 import { getSkills, skillFileFilter } from "../skills/store";
 import type { ChatSession } from "../sessions";
 import type { SelectionScope, SessionEvent } from "../types";
+import { resolveModel } from "../types";
 import { getModelDisplayName } from "../settings";
 import { contextWindowOf, onContextWindowsChange } from "../api/context-window";
 
@@ -87,7 +88,7 @@ export class ObsidianChatView extends ItemView {
         app: this.app,
         component: this,
         provider: this.plugin.settings.provider,
-        model: getModelDisplayName(this.plugin.settings.provider, this.plugin.settings.model),
+        model: getModelDisplayName(this.plugin.settings.provider, resolveModel(this.plugin.settings)),
         onSend: (text: string, selection: SelectionScope | null) =>
           this.handleUserMessage(text, selection),
         onClear: () => this.handleClear(),
