@@ -7,6 +7,7 @@ import type {
   ContentBlock,
 } from "../types";
 import { resolveModel } from "../types";
+import { compactionThreshold, summariesAsText } from "./compaction";
 
 /** Shared with the Models API call in settings.ts. */
 export const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
@@ -28,6 +29,11 @@ export async function sendAnthropicMessage(
   systemPrompt: string
 ): Promise<UnifiedResponse> {
   const model = resolveModel(settings);
+  // Past the threshold the API summarizes everything before the newest turn
+  // into a compaction block and answers from that. Models without it are
+  // trimmed by the loop instead, and get any earlier summary as text.
+  const compactAt = compactionThreshold("anthropic", model, settings.compactAt);
+  const sent = compactAt === null ? summariesAsText(messages) : messages;
   const body: Record<string, unknown> = {
     model,
     max_tokens: 16384,
@@ -40,8 +46,19 @@ export async function sendAnthropicMessage(
         cache_control: { type: "ephemeral" },
       },
     ],
-    messages: withConversationCacheBreakpoint(messages.map(toAnthropicMessage)),
+    messages: withConversationCacheBreakpoint(sent.map(toAnthropicMessage)),
   };
+  const headers: Record<string, string> = {
+    "x-api-key": settings.apiKey,
+    "anthropic-version": ANTHROPIC_VERSION,
+    "content-type": "application/json",
+  };
+  if (compactAt !== null) {
+    headers["anthropic-beta"] = "compact-2026-01-12";
+    body.context_management = {
+      edits: [{ type: "compact_20260112", trigger: { type: "input_tokens", value: compactAt } }],
+    };
+  }
 
   // Enable thinking based on model generation:
   // - Sonnet 4.6 / Opus 4.6: use adaptive thinking (auto-determines depth)
@@ -90,11 +107,7 @@ export async function sendAnthropicMessage(
     response = await requestUrl({
       url: ANTHROPIC_API_URL,
       method: "POST",
-      headers: {
-        "x-api-key": settings.apiKey,
-        "anthropic-version": ANTHROPIC_VERSION,
-        "content-type": "application/json",
-      },
+      headers,
       body: JSON.stringify(body),
       throw: false,
     });
@@ -138,8 +151,10 @@ export async function sendAnthropicMessage(
 // ─── Format Conversions ─────────────────────────────────────────────────────
 
 interface AnthropicContentBlock {
-  type: "text" | "tool_use" | "web_search_tool_result" | "server_tool_use" | "thinking";
+  type: "text" | "tool_use" | "web_search_tool_result" | "server_tool_use" | "thinking" | "compaction";
   text?: string;
+  /** A compaction block's summary. */
+  content?: string | null;
   thinking?: string;
   id?: string;
   name?: string;
@@ -200,6 +215,10 @@ function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {
         input: block.input,
       };
     }
+    // Sent back as is: the API drops everything before it.
+    if (block.type === "compaction") {
+      return { type: "compaction", content: block.content };
+    }
     return { type: "text", text: block.text };
   }).filter((b) => !(b.type === "text" && !b.text));
 
@@ -207,6 +226,9 @@ function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {
 }
 
 function fromAnthropicBlock(block: AnthropicContentBlock): ContentBlock | null {
+  if (block.type === "compaction") {
+    return typeof block.content === "string" ? { type: "compaction", content: block.content } : null;
+  }
   if (block.type === "tool_use") {
     return {
       type: "tool_use",

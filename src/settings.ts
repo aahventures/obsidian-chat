@@ -266,6 +266,31 @@ export class ChatSettingTab extends PluginSettingTab {
         );
     }
 
+    // ─── Compaction ───────────────────────────────────────────────────
+    new Setting(containerEl)
+      .setName("Compact at")
+      .setDesc(
+        s.provider === "anthropic"
+          ? "When a chat's context reaches this size, Claude summarizes the older part and the chat carries on " +
+              "from the summary. Lower keeps each request cheaper; higher keeps more word for word. Older Claude " +
+              "models (Haiku 4.5, and those before 4.6) don't compact and drop their oldest messages instead."
+          : `${s.provider === "openai" ? "OpenAI chats don't compact yet" : "Custom providers don't compact"}, ` +
+              "so long chats drop their oldest messages instead."
+      )
+      .addDropdown((dropdown) => {
+        const sizes = [50_000, 100_000, 150_000, 200_000, 300_000, 500_000];
+        // A value set by hand in data.json still shows.
+        if (!sizes.includes(s.compactAt)) sizes.push(s.compactAt);
+        for (const n of sizes.sort((a, b) => a - b)) dropdown.addOption(String(n), `${n / 1000}k tokens`);
+        dropdown
+          .setValue(String(s.compactAt))
+          .setDisabled(s.provider !== "anthropic")
+          .onChange(async (value) => {
+            s.compactAt = Number(value);
+            await this.plugin.saveSettings();
+          });
+      });
+
     // ─── File link menu ───────────────────────────────────────────────
     new Setting(containerEl)
       .setName("File link suggestions")

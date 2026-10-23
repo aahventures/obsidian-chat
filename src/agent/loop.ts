@@ -11,6 +11,7 @@ import type {
 import { resolveModel } from "../types";
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
+import { returnsSummary, isSummary } from "../api/compaction";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool, skillResult, skippedReason } from "../tools/executor";
 import { buildContext } from "./context";
@@ -51,17 +52,19 @@ export function isTurnStart(message: UnifiedMessage): boolean {
  * start on an assistant message, or on a tool_result whose tool_use was cut
  * off, and the API rejects both. So the cut moves forward to the next turn,
  * or, if no turn starts inside the window, back to the start of the one it's
- * in. With no `max`, this only drops a partial turn from the front.
+ * in. With no `max`, this only drops a partial turn from the front. A
+ * compaction summary is a valid start too: it stands for everything before it.
  */
 export function trimToTurns(messages: UnifiedMessage[], max = messages.length): UnifiedMessage[] {
   if (messages.length === 0) return messages;
+  const starts = (m: UnifiedMessage) => isTurnStart(m) || isSummary(m);
   const cut = Math.max(0, messages.length - max);
   let start = cut;
-  while (start < messages.length && !isTurnStart(messages[start])) start++;
+  while (start < messages.length && !starts(messages[start])) start++;
   if (start === messages.length) {
     start = cut;
-    while (start > 0 && !isTurnStart(messages[start])) start--;
-    if (!isTurnStart(messages[start])) return [];
+    while (start > 0 && !starts(messages[start])) start--;
+    if (!starts(messages[start])) return [];
   }
   return start === 0 ? messages : messages.slice(start);
 }
@@ -119,6 +122,14 @@ export class AgentLoop {
    */
   get sendsFullHistory(): boolean {
     return this.settings.provider !== "openai" || !this.openaiState.previousResponseId;
+  }
+
+  /**
+   * The history opens with a compaction summary, so the model has all of it:
+   * the older part as that summary.
+   */
+  get startsFromSummary(): boolean {
+    return isSummary(this.messages[0]);
   }
 
   /** Export API messages for persistence */
@@ -189,6 +200,11 @@ export class AgentLoop {
             parts.push("```json");
             parts.push(JSON.stringify(block.input, null, 2));
             parts.push("```");
+            parts.push(``);
+          } else if (block.type === "compaction") {
+            parts.push(`### Summary of the earlier conversation`);
+            parts.push(``);
+            parts.push(block.content || "(empty)");
             parts.push(``);
           } else if (block.type === "tool_result") {
             parts.push(`### Tool Result ${block.is_error ? "(ERROR)" : ""}`);
@@ -318,6 +334,15 @@ export class AgentLoop {
       debugLog(this.app, "API_RESPONSE", { stopReason: response.stopReason, contentTypes: response.content.map(b => b.type), usage: response.usage });
 
       if (stopped()) return;
+      // The API ignores whatever comes before a summary, so neither it nor
+      // the blocks ahead of it in this response are kept: the history opens
+      // with the latest summary. (A response that searched can compact more
+      // than once.)
+      const summaryAt = response.content.map((b) => b.type).lastIndexOf("compaction");
+      if (summaryAt !== -1) {
+        this.messages = [];
+        callbacks.onCompacted?.();
+      }
       // The API's own name for the model beats the one it was sent to.
       if (response.usage) {
         callbacks.onUsage?.(response.usage, {
@@ -346,7 +371,10 @@ export class AgentLoop {
       }
 
       // Append assistant message to history
-      this.messages.push({ role: "assistant", content: response.content });
+      this.messages.push({
+        role: "assistant",
+        content: summaryAt > 0 ? response.content.slice(summaryAt) : response.content,
+      });
 
       // If no tool calls, we're done
       if (toolCalls.length === 0) {
@@ -436,9 +464,12 @@ export class AgentLoop {
 
   /**
    * Drop oldest messages when conversation gets too long, keeping recent
-   * context. Returns how many user turns were dropped.
+   * context. Returns how many user turns were dropped. Not when Anthropic
+   * compacts: that bounds the history too, summarizing the older part once
+   * it's large, and a trim would only throw away cached context early.
    */
   private pruneHistory(): number {
+    if (returnsSummary(this.settings.provider, resolveModel(this.settings))) return 0;
     if (this.messages.length <= MAX_CONVERSATION_LENGTH) return 0;
     const before = this.messages.filter(isTurnStart).length;
     this.messages = trimToTurns(this.messages, KEEP_RECENT);
