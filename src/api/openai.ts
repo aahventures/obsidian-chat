@@ -7,6 +7,7 @@ import type {
   ContentBlock,
   OpenAIConversationState,
 } from "../types";
+import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
 
 const DEFAULT_OPENAI_URL = "https://api.openai.com";
@@ -30,7 +31,7 @@ export async function sendOpenAIMessage(
   state: OpenAIConversationState
 ): Promise<UnifiedResponse> {
   const baseUrl = DEFAULT_OPENAI_URL;
-  const model = settings.model || "gpt-5.3-codex";
+  const model = resolveModel(settings);
 
   // Build input: only the NEW items for this turn
   const input = buildCurrentTurnInput(messages, state);
