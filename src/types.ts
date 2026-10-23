@@ -13,6 +13,11 @@ export interface ChatSettings {
   fileLinkMenu: boolean;
   /** Vault folder holding skills as `<name>/SKILL.md`. Empty for none. */
   skillsFolder: string;
+  /**
+   * Input size in tokens at which the provider summarizes a chat's older
+   * context (Anthropic, for now). The context meter fills toward it.
+   */
+  compactAt: number;
 }
 
 /** The model a request goes to when the setting is empty (as after a provider change). */
@@ -40,12 +45,15 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   fileLinkMenu: true,
   // Off until set: a vault may already have a Skills folder that was never meant as skills.
   skillsFolder: "",
+  // Where Codex compacts too. A 1M model could go on, at a cost on every request.
+  compactAt: 200_000,
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
 
 export interface ContentBlock {
-  type: "text" | "tool_use" | "tool_result";
+  /** "compaction": Anthropic's summary of everything before it, in `content`. */
+  type: "text" | "tool_use" | "tool_result" | "compaction";
   text?: string;
   id?: string;
   name?: string;
@@ -145,6 +153,8 @@ export interface AgentCallbacks {
   onError: (error: string) => void;
   /** History was trimmed before this turn's first call; `turns` user turns were dropped. */
   onTrim?: (turns: number) => void;
+  /** The provider summarized the older context; reported before that response's text. */
+  onCompacted?: () => void;
   /** The skills this turn's message named as /name that ran, for its chips. */
   onSkillsNamed?: (skills: NamedSkill[]) => void;
   /** Token usage of each API response, with the provider and model it came from. */
