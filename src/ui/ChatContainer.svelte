@@ -247,15 +247,6 @@
     return event.button === 1 ? "tab" : Keymap.isModEvent(event);
   }
 
-  /** Percent-encoded paths come through markdown-style links: `[x](A%20B.md)`. */
-  function decodeLinkText(href: string): string {
-    try {
-      return decodeURIComponent(href);
-    } catch {
-      return href;
-    }
-  }
-
   /**
    * Open an internal link clicked inside a rendered message.
    *
@@ -283,21 +274,17 @@
     event.stopPropagation();
 
     const sourcePath = app.workspace.getActiveFile()?.path ?? "";
-    // A subpath-only link (`[[#Heading]]`) targets the current note itself.
-    const resolves = (text: string) => {
-      const target = text.split("#")[0];
-      return !target || app.metadataCache.getFirstLinkpathDest(target, sourcePath) !== null;
-    };
-    // Markdown links can arrive percent-encoded and wikilinks never do, but
-    // the anchor does not say which this was. Try the text as written first,
-    // so a note with a literal `%20` in its name still opens.
-    const linktext = [href, decodeLinkText(href)].find(resolves);
-    if (linktext === undefined) {
-      new Notice(`No note matching "${decodeLinkText(href).split("#")[0]}" in the vault.`);
+    // Obsidian decodes Markdown links during rendering; wikilinks stay
+    // literal. Decoding again could silently open a different note.
+    const target = href.split("#")[0];
+    // An empty target resolves to the source note, or null when there is no
+    // active note. Validate it too so openLinkText cannot create a new file.
+    if (app.metadataCache.getFirstLinkpathDest(target, sourcePath) === null) {
+      new Notice(target ? `No note matching "${target}" in the vault.` : "No active note for this link.");
       return;
     }
 
-    void app.workspace.openLinkText(linktext, sourcePath, panePreference(event));
+    void app.workspace.openLinkText(href, sourcePath, panePreference(event));
   }
 
   function formatToolName(name: string): string {
