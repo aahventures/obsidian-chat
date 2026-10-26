@@ -92,22 +92,6 @@ export class ChatSession {
       flat.length > MAX_TITLE_LENGTH ? `${flat.slice(0, MAX_TITLE_LENGTH - 1)}…` : flat;
   }
 
-  /**
-   * Name the session. A blank name goes back to the derived title, from the
-   * first message if there is one. A name is kept until the next Clear, and
-   * the first message doesn't replace it.
-   */
-  rename(name: string): void {
-    const flat = name.replace(/\s+/g, " ").trim();
-    if (flat) {
-      this.title = flat;
-      return;
-    }
-    this.title = UNTITLED;
-    const first = this.chatHistory.find((e) => e.type === "user" && e.text);
-    if (first?.text) this.maybeTitleFrom(first.text);
-  }
-
   touch(): void {
     this.updatedAt = Date.now();
   }
@@ -299,10 +283,10 @@ export class SessionStore {
    */
   rename(id: string, name: string): void {
     const session = this.get(id);
-    if (!session) return;
-    const title = session.title;
-    session.rename(name);
-    if (session.title === title) return;
+    const title = name.replace(/\s+/g, " ").trim();
+    // A blank name changes nothing, like Cancel.
+    if (!session || !title || title === session.title) return;
+    session.title = title;
     this.emit(session, { kind: "title", title: session.title });
     this.onChange();
   }

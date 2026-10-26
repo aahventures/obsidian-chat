@@ -1,9 +1,6 @@
 import { App, Modal, Setting } from "obsidian";
 
-/**
- * Ask for a chat's new name. Enter or Save applies it; a blank name goes back
- * to the title taken from the first message.
- */
+/** Ask for a chat's new name. Enter or Save applies it; a blank name changes nothing. */
 export class RenameChatModal extends Modal {
   private name: string;
 
@@ -21,12 +18,12 @@ export class RenameChatModal extends Modal {
 
     new Setting(this.contentEl)
       .setName("Name")
-      .setDesc("Leave blank to name it after its first message again.")
       .addText((text) => {
         text.setValue(this.name).onChange((value) => (this.name = value));
         text.inputEl.addEventListener("keydown", (event) => {
-          // Not mid-composition, so Enter can confirm an IME candidate.
-          if (event.key === "Enter" && !event.isComposing) {
+          // Not mid-composition, so Enter can confirm an IME candidate. WebKit
+          // ends the composition before keydown, which then reports 229.
+          if (event.key === "Enter" && !event.isComposing && event.keyCode !== 229) {
             event.preventDefault();
             this.save();
           }
