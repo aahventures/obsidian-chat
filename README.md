@@ -100,9 +100,9 @@ its own agent state, so context never carries between them.
 - **New chat** starts a session; existing ones keep their history.
 - Once more than one session exists, a dropdown appears in the chat header to
   switch between them. Sessions are named after their first message.
-- **Rename** a chat with the pencil beside its name in the header, the
-  "Rename this chat" command, or the ribbon icon's right-click menu. A name
-  you give stays until the chat is cleared.
+- **Rename** a chat with the pencil beside its name in the header, or the
+  "Rename this chat" command. A name you give stays until the chat is
+  cleared.
 - Sessions are **not** scoped to a note — a chat can range across the whole
   vault, which is the point of the plugin. "Chat about this note" and "Send
   selection to Chat" start a new session rather than interrupting the one

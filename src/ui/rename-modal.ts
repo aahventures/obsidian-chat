@@ -28,8 +28,10 @@ export class RenameChatModal extends Modal {
             this.save();
           }
         });
-        // Selected, so typing replaces the old name.
-        window.setTimeout(() => text.inputEl.select(), 0);
+        // Focused while the tap that opened this is still being handled, so a
+        // phone raises its keyboard; selected, so typing replaces the old name.
+        text.inputEl.focus();
+        text.inputEl.select();
       });
 
     new Setting(this.contentEl)

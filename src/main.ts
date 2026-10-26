@@ -67,9 +67,6 @@ export default class ChatPlugin extends Plugin {
           item.setTitle("Switch chat").setIcon("list").onClick(() => this.openSessionSwitcher())
         );
         menu.addItem((item) =>
-          item.setTitle("Rename chat").setIcon("pencil").onClick(() => this.renameCurrentChat())
-        );
-        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
