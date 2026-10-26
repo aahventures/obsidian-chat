@@ -7,6 +7,8 @@ export class RenameChatModal extends Modal {
   constructor(
     app: App,
     current: string,
+    /** What the chat is shown as, for an empty field: an untitled chat's "New chat". */
+    private shown: string,
     private onRename: (name: string) => void
   ) {
     super(app);
@@ -19,7 +21,10 @@ export class RenameChatModal extends Modal {
     new Setting(this.contentEl)
       .setName("Name")
       .addText((text) => {
-        text.setValue(this.name).onChange((value) => (this.name = value));
+        text
+          .setValue(this.name)
+          .setPlaceholder(this.shown)
+          .onChange((value) => (this.name = value));
         text.inputEl.addEventListener("keydown", (event) => {
           // Not mid-composition, so Enter can confirm an IME candidate. WebKit
           // ends the composition before keydown, which then reports 229.
