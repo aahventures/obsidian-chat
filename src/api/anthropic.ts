@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { resolveModel } from "../types";
 import { compactionThreshold, summariesAsText } from "./compaction";
+import { MCP_BETA, activeMcpServers, mcpCallsAsText, mcpServerNames } from "./mcp";
 
 /** Shared with the Models API call in settings.ts. */
 export const ANTHROPIC_API_BASE = "https://api.anthropic.com/v1";
@@ -33,7 +34,14 @@ export async function sendAnthropicMessage(
   // into a compaction block and answers from that. Models without it are
   // trimmed by the loop instead, and get any earlier summary as text.
   const compactAt = compactionThreshold("anthropic", model, settings.compactAt);
-  const sent = compactAt === null ? summariesAsText(messages) : messages;
+  // MCP servers are called by the API itself, mid-response. A call to one this
+  // request doesn't name (off or renamed since) goes back as text.
+  const servers = activeMcpServers(settings);
+  const serverNames = mcpServerNames(servers);
+  const sent = mcpCallsAsText(
+    compactAt === null ? summariesAsText(messages) : messages,
+    new Set(serverNames.values())
+  );
   const body: Record<string, unknown> = {
     model,
     max_tokens: 16384,
@@ -53,12 +61,23 @@ export async function sendAnthropicMessage(
     "anthropic-version": ANTHROPIC_VERSION,
     "content-type": "application/json",
   };
+  const betas: string[] = [];
   if (compactAt !== null) {
-    headers["anthropic-beta"] = "compact-2026-01-12";
+    betas.push("compact-2026-01-12");
     body.context_management = {
       edits: [{ type: "compact_20260112", trigger: { type: "input_tokens", value: compactAt } }],
     };
   }
+  if (servers.length > 0) {
+    betas.push(MCP_BETA);
+    body.mcp_servers = servers.map((s) => ({
+      type: "url",
+      url: s.url.trim(),
+      name: serverNames.get(s),
+      ...(s.token ? { authorization_token: s.token } : {}),
+    }));
+  }
+  if (betas.length > 0) headers["anthropic-beta"] = betas.join(",");
 
   // Enable thinking based on model generation:
   // - Sonnet 4.6 / Opus 4.6: use adaptive thinking (auto-determines depth)
@@ -74,7 +93,7 @@ export async function sendAnthropicMessage(
     body.thinking = { type: "enabled", budget_tokens: 8192 };
   }
 
-  if (tools.length > 0 || settings.enableWebSearch) {
+  if (tools.length > 0 || settings.enableWebSearch || servers.length > 0) {
     const apiTools: Record<string, unknown>[] = tools.map((t, i, arr) => {
       const tool: Record<string, unknown> = {
         name: t.name,
@@ -97,6 +116,11 @@ export async function sendAnthropicMessage(
         max_uses: 3,
         cache_control: { type: "ephemeral" },
       });
+    }
+
+    // Each server's tools, all of them; the API lists them from the server.
+    for (const name of serverNames.values()) {
+      apiTools.push({ type: "mcp_toolset", mcp_server_name: name });
     }
 
     body.tools = apiTools;
@@ -129,11 +153,19 @@ export async function sendAnthropicMessage(
   }
 
   const data = response.json;
+  const content = (data.content as AnthropicContentBlock[])
+    .map(fromAnthropicBlock)
+    .filter((b): b is ContentBlock => b !== null);
+  // A result names only its call: give it the call's server and tool too.
+  for (const block of content) {
+    if (block.type !== "mcp_tool_result") continue;
+    const call = content.find((b) => b.type === "mcp_tool_use" && b.id === block.tool_use_id);
+    block.server = call?.server;
+    block.name = call?.name;
+  }
 
   return {
-    content: (data.content as AnthropicContentBlock[])
-      .map(fromAnthropicBlock)
-      .filter((b): b is ContentBlock => b !== null),
+    content,
     stopReason: data.stop_reason === "end_turn" ? "end_turn" : data.stop_reason,
     model: typeof data.model === "string" ? data.model : undefined,
     usage: data.usage
@@ -151,10 +183,22 @@ export async function sendAnthropicMessage(
 // ─── Format Conversions ─────────────────────────────────────────────────────
 
 interface AnthropicContentBlock {
-  type: "text" | "tool_use" | "web_search_tool_result" | "server_tool_use" | "thinking" | "compaction";
+  type:
+    | "text"
+    | "tool_use"
+    | "web_search_tool_result"
+    | "server_tool_use"
+    | "thinking"
+    | "compaction"
+    | "mcp_tool_use"
+    | "mcp_tool_result";
   text?: string;
-  /** A compaction block's summary. */
-  content?: string | null;
+  /** A compaction block's summary, or what an MCP call returned. */
+  content?: string | null | Array<{ type: string; text?: string }>;
+  /** On an MCP call: the server it went to, by the name it was sent under. */
+  server_name?: string;
+  tool_use_id?: string;
+  is_error?: boolean;
   thinking?: string;
   id?: string;
   name?: string;
@@ -184,6 +228,9 @@ function withConversationCacheBreakpoint(
     content = [{ type: "text", text: last.content, ...marker }];
   } else if (Array.isArray(last.content) && last.content.length > 0) {
     const blocks = [...(last.content as Record<string, unknown>[])];
+    // A paused turn sent back to finish ends on an MCP call; not marked, as
+    // whether those blocks take a breakpoint isn't known. That request goes uncached.
+    if (String(blocks[blocks.length - 1].type).startsWith("mcp_")) return apiMessages;
     blocks[blocks.length - 1] = { ...blocks[blocks.length - 1], ...marker };
     content = blocks;
   } else {
@@ -219,6 +266,24 @@ function toAnthropicMessage(msg: UnifiedMessage): Record<string, unknown> {
     if (block.type === "compaction") {
       return { type: "compaction", content: block.content };
     }
+    // Only for a server this request names; mcpCallsAsText made the rest text.
+    if (block.type === "mcp_tool_use") {
+      return {
+        type: "mcp_tool_use",
+        id: block.id,
+        name: block.name,
+        server_name: block.server,
+        input: block.input ?? {},
+      };
+    }
+    if (block.type === "mcp_tool_result") {
+      return {
+        type: "mcp_tool_result",
+        tool_use_id: block.tool_use_id,
+        is_error: block.is_error || false,
+        content: block.content ? [{ type: "text", text: block.content }] : [],
+      };
+    }
     return { type: "text", text: block.text };
   }).filter((b) => !(b.type === "text" && !b.text));
 
@@ -237,6 +302,13 @@ function fromAnthropicBlock(block: AnthropicContentBlock): ContentBlock | null {
       input: block.input,
     };
   }
+  // Calls the API made to an MCP server, kept so they can be shown and sent back.
+  if (block.type === "mcp_tool_use") {
+    return { type: "mcp_tool_use", id: block.id, name: block.name, server: block.server_name, input: block.input ?? {} };
+  }
+  if (block.type === "mcp_tool_result") {
+    return { type: "mcp_tool_result", tool_use_id: block.tool_use_id, content: mcpResultText(block.content), is_error: block.is_error === true };
+  }
   // Web search results are server-managed; render as text for the user
   if (block.type === "web_search_tool_result" && block.search_results) {
     const formatted = block.search_results
@@ -253,4 +325,10 @@ function fromAnthropicBlock(block: AnthropicContentBlock): ContentBlock | null {
     return null;
   }
   return { type: "text", text: block.text };
+}
+
+/** An MCP result's content as text; anything else it holds (an image) by its type. */
+function mcpResultText(content: AnthropicContentBlock["content"]): string {
+  if (typeof content === "string") return content;
+  return (content ?? []).map((part) => (part.type === "text" ? part.text ?? "" : `[${part.type}]`)).join("\n");
 }

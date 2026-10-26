@@ -18,6 +18,23 @@ export interface ChatSettings {
    * context (Anthropic, for now). The context meter fills toward it.
    */
   compactAt: number;
+  /** Remote MCP servers the provider connects to (Anthropic, for now). */
+  mcpServers: McpServer[];
+}
+
+/**
+ * A remote MCP server. The provider calls it, not the plugin, so it works the
+ * same on mobile; the plugin only says where it is and passes its token.
+ */
+export interface McpServer {
+  /** Keys its token in SecretStorage, so a rename keeps it. */
+  id: string;
+  name: string;
+  /** Must be https: the provider reaches it from the internet. */
+  url: string;
+  enabled: boolean;
+  /** From SecretStorage, on this device only; never saved to data.json. */
+  token: string;
 }
 
 /** The model a request goes to when the setting is empty (as after a provider change). */
@@ -47,13 +64,19 @@ export const DEFAULT_SETTINGS: ChatSettings = {
   skillsFolder: "",
   // Where Codex compacts too. A 1M model could go on, at a cost on every request.
   compactAt: 200_000,
+  mcpServers: [],
 };
 
 // ─── Unified Message Format ─────────────────────────────────────────────────
 
 export interface ContentBlock {
-  /** "compaction": Anthropic's summary of everything before it, in `content`. */
-  type: "text" | "tool_use" | "tool_result" | "compaction";
+  /**
+   * "compaction": Anthropic's summary of everything before it, in `content`.
+   * "mcp_tool_use" / "mcp_tool_result": a call the provider made to an MCP
+   * server mid-response, and what it returned (as text, in `content`). Both
+   * carry the `server` and tool `name`.
+   */
+  type: "text" | "tool_use" | "tool_result" | "compaction" | "mcp_tool_use" | "mcp_tool_result";
   text?: string;
   id?: string;
   name?: string;
@@ -61,6 +84,8 @@ export interface ContentBlock {
   tool_use_id?: string;
   content?: string;
   is_error?: boolean;
+  /** On MCP blocks: the server's name as sent (`mcpServerNames`). */
+  server?: string;
 }
 
 export interface UnifiedMessage {

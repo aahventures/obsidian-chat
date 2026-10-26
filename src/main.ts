@@ -9,7 +9,7 @@ import {
   type TAbstractFile,
   type WorkspaceLeaf,
 } from "obsidian";
-import type { ChatSettings, SelectionScope } from "./types";
+import type { ChatSettings, McpServer, SelectionScope } from "./types";
 import { DEFAULT_SETTINGS, resolveModel } from "./types";
 import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
@@ -589,14 +589,36 @@ export default class ChatPlugin extends Plugin {
 
     // Load API key for the current provider from SecretStorage
     this.settings.apiKey = this.loadApiKey(this.settings.provider);
+
+    // Each MCP server's token too. data.json is edited by hand and synced, so
+    // anything that isn't a server is dropped.
+    const servers: Partial<McpServer>[] = Array.isArray(this.settings.mcpServers) ? this.settings.mcpServers : [];
+    this.settings.mcpServers = servers
+      .filter((s): s is McpServer => typeof s?.id === "string" && /^[a-z0-9-]+$/.test(s.id))
+      .map((s) => ({
+        id: s.id,
+        name: typeof s.name === "string" ? s.name : "",
+        url: typeof s.url === "string" ? s.url : "",
+        enabled: s.enabled === true,
+        token: this.loadSecret(mcpTokenKey(s.id)),
+      }));
   }
 
   async saveSettings(): Promise<void> {
     // Store API key in SecretStorage keyed by provider
     this.saveApiKey(this.settings.provider, this.settings.apiKey || "");
 
+    for (const server of this.settings.mcpServers) {
+      this.saveSecret(mcpTokenKey(server.id), server.token);
+    }
+
     // Save all other settings to data.json (syncs), but strip the API key
-    const toSave = { ...this.settings, apiKey: "" };
+    // and the MCP tokens
+    const toSave = {
+      ...this.settings,
+      apiKey: "",
+      mcpServers: this.settings.mcpServers.map((server) => ({ ...server, token: "" })),
+    };
     await this.saveData(toSave);
 
     // Update every chat pane's header with the new model name
@@ -614,18 +636,36 @@ export default class ChatPlugin extends Plugin {
   }
 
   private loadApiKey(provider: string): string {
+    return this.loadSecret(`obsidian-chat-api-key-${provider}`);
+  }
+
+  private saveApiKey(provider: string, key: string): void {
+    this.saveSecret(`obsidian-chat-api-key-${provider}`, key);
+  }
+
+  /** Forget a removed MCP server's token. */
+  forgetMcpToken(server: McpServer): void {
+    this.saveSecret(mcpTokenKey(server.id), "");
+  }
+
+  private loadSecret(id: string): string {
     try {
-      return this.app.secretStorage.getSecret(`obsidian-chat-api-key-${provider}`) || "";
+      return this.app.secretStorage.getSecret(id) || "";
     } catch {
       return "";
     }
   }
 
-  private saveApiKey(provider: string, key: string): void {
+  private saveSecret(id: string, secret: string): void {
     try {
-      this.app.secretStorage.setSecret(`obsidian-chat-api-key-${provider}`, key);
+      this.app.secretStorage.setSecret(id, secret);
     } catch {
       // SecretStorage not available
     }
   }
+}
+
+/** Where an MCP server's token is kept: by its id, so a rename keeps it. */
+function mcpTokenKey(id: string): string {
+  return `obsidian-chat-mcp-token-${id}`;
 }

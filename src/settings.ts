@@ -11,6 +11,8 @@ import {
 import { isCommandName, scanSkills, skillsFolderPath } from "./skills/store";
 import type ChatPlugin from "./main";
 import type { Provider } from "./types";
+import { uniqueId } from "./util/id";
+import { isMcpAddress } from "./api/mcp";
 import { rememberContextWindows } from "./api/context-window";
 import { ANTHROPIC_API_BASE, ANTHROPIC_VERSION } from "./api/anthropic";
 
@@ -322,8 +324,90 @@ export class ChatSettingTab extends PluginSettingTab {
           })
       );
 
-    // Last, under its own heading, so the general settings above stay together.
+    // Last, under their own headings, so the general settings above stay together.
     this.displaySkills(containerEl);
+    this.displayMcpServers(containerEl);
+  }
+
+  private displayMcpServers(containerEl: HTMLElement): void {
+    const s = this.plugin.settings;
+    new Setting(containerEl).setName("MCP servers").setHeading();
+    new Setting(containerEl).setDesc(
+      "Remote MCP servers the chat can use, such as your own, or a hosted service that connects other apps. " +
+        "Anthropic connects to them, not this device, so they work on mobile too, and each needs a public https address. " +
+        "Their tools run without asking first, so only add servers you trust. " +
+        "A token stays on the device it was entered on. " +
+        (s.provider === "anthropic" ? "" : "Only Anthropic chats use these for now.")
+    );
+
+    for (const server of s.mcpServers) {
+      new Setting(containerEl)
+        .setName("Name")
+        .addText((text) =>
+          text
+            .setPlaceholder("e.g. Tools")
+            .setValue(server.name)
+            .onChange(async (value) => {
+              server.name = value.trim();
+              await this.plugin.saveSettings();
+            })
+        )
+        .addToggle((toggle) =>
+          toggle
+            .setTooltip("Use this server")
+            .setValue(server.enabled)
+            .onChange(async (value) => {
+              server.enabled = value;
+              await this.plugin.saveSettings();
+            })
+        )
+        .addExtraButton((button) =>
+          button
+            .setIcon("trash")
+            .setTooltip("Remove")
+            .onClick(async () => {
+              this.plugin.forgetMcpToken(server);
+              s.mcpServers = s.mcpServers.filter((other) => other !== server);
+              await this.plugin.saveSettings();
+              this.display();
+            })
+        );
+
+      const addressDesc = (url: string) =>
+        !url || isMcpAddress(url) ? "" : "Needs to start with https://; until then it isn't used.";
+      const address = new Setting(containerEl)
+        .setName("Address")
+        .setDesc(addressDesc(server.url))
+        .addText((text) =>
+          text
+            .setPlaceholder("https://")
+            .setValue(server.url)
+            .onChange(async (value) => {
+              server.url = value.trim();
+              address.setDesc(addressDesc(server.url));
+              await this.plugin.saveSettings();
+            })
+        );
+
+      new Setting(containerEl)
+        .setName("Token")
+        .setDesc("Sent as a bearer token. Leave empty if the server needs none.")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.setValue(server.token).onChange(async (value) => {
+            server.token = value.trim();
+            await this.plugin.saveSettings();
+          });
+        });
+    }
+
+    new Setting(containerEl).addButton((button) =>
+      button.setButtonText("Add server").onClick(async () => {
+        s.mcpServers.push({ id: uniqueId("mcp-"), name: "", url: "", enabled: true, token: "" });
+        await this.plugin.saveSettings();
+        this.display();
+      })
+    );
   }
 
   private displaySkills(containerEl: HTMLElement): void {

@@ -9,6 +9,7 @@ import type {
 import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
 import { summariesAsText } from "./compaction";
+import { mcpCallsAsText } from "./mcp";
 
 /**
  * Sends a message to any OpenAI Chat Completions-compatible API (DeepSeek,
@@ -34,8 +35,9 @@ export async function sendCustomMessage(
   }
 
   // Convert unified messages to OpenAI Chat Completions format. An Anthropic
-  // summary from earlier in the chat goes as text.
-  for (const msg of summariesAsText(messages)) {
+  // summary, or a call Anthropic made to an MCP server, from earlier in the
+  // chat goes as text.
+  for (const msg of mcpCallsAsText(summariesAsText(messages))) {
     if (typeof msg.content === "string") {
       apiMessages.push({ role: msg.role, content: msg.content });
     } else {

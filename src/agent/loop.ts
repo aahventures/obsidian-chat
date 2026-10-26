@@ -12,6 +12,7 @@ import { resolveModel } from "../types";
 import { sendMessage } from "../api/client";
 import { clearOpenAIState } from "../api/openai";
 import { returnsSummary, isSummary } from "../api/compaction";
+import { mcpCallLabel } from "../api/mcp";
 import { TOOL_DEFINITIONS } from "../tools/registry";
 import { executeTool, skillResult, skippedReason } from "../tools/executor";
 import { buildContext } from "./context";
@@ -201,6 +202,20 @@ export class AgentLoop {
             parts.push(JSON.stringify(block.input, null, 2));
             parts.push("```");
             parts.push(``);
+          } else if (block.type === "mcp_tool_use") {
+            parts.push(`### MCP Call: \`${mcpCallLabel(block)}\``);
+            parts.push(``);
+            parts.push("```json");
+            parts.push(JSON.stringify(block.input, null, 2));
+            parts.push("```");
+            parts.push(``);
+          } else if (block.type === "mcp_tool_result") {
+            parts.push(`### MCP Result ${block.is_error ? "(ERROR)" : ""}`);
+            parts.push(``);
+            parts.push("```");
+            parts.push(block.content || "(empty)");
+            parts.push("```");
+            parts.push(``);
           } else if (block.type === "compaction") {
             parts.push(`### Summary of the earlier conversation`);
             parts.push(``);
@@ -360,6 +375,18 @@ export class AgentLoop {
           textParts.push(block.text);
         } else if (block.type === "tool_use") {
           toolCalls.push(block);
+        } else if (block.type === "mcp_tool_use" || block.type === "mcp_tool_result") {
+          // The provider already ran it, mid-response: shown in place, after
+          // the text that led up to it.
+          if (textParts.length > 0) callbacks.onResponse(textParts.splice(0).join(""));
+          if (block.type === "mcp_tool_use") {
+            callbacks.onToolCall(block.id ?? uniqueId("mcp-"), mcpCallLabel(block), block.input ?? {});
+          } else if (block.tool_use_id) {
+            callbacks.onToolResult(block.tool_use_id, mcpCallLabel(block), {
+              result: block.content ?? "",
+              isError: block.is_error === true,
+            });
+          }
         }
       }
 
@@ -375,6 +402,16 @@ export class AgentLoop {
         role: "assistant",
         content: summaryAt > 0 ? response.content.slice(summaryAt) : response.content,
       });
+
+      // A long run of MCP calls can pause the turn; sending the history again,
+      // ending with this response, lets it finish. Not after a web search: its
+      // blocks aren't kept, so the history would end in plain text, which
+      // newer models reject as a prefill.
+      const ranMcp = response.content.some((b) => b.type === "mcp_tool_use" || b.type === "mcp_tool_result");
+      if (toolCalls.length === 0 && response.stopReason === "pause_turn" && ranMcp) {
+        if (textParts.length > 0) callbacks.onResponse(textParts.join(""));
+        continue;
+      }
 
       // If no tool calls, we're done
       if (toolCalls.length === 0) {

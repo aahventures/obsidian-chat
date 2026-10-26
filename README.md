@@ -56,6 +56,15 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 - **Adding skills**: a skill is just a folder, so copy it into the skills folder. On a computer, drag it in (Finder, Explorer, or Obsidian's file list). On a phone, use the Files app: your vault is a folder there. A `.zip` (as claude.ai downloads skills) needs unzipping first (on iPhone, tap it in Files); check that `SKILL.md` ends up directly in the skill's folder, since a skill one folder deeper isn't found. From Claude Code, copy the folders in `~/.claude/skills`. Or ask the chat to make one ("make a skill that turns meeting notes into action items"): it knows the format and where skills go.
 - **Scripts don't run.** The chat follows a skill's instructions and can read its other files, but a skill that depends on its scripts only partly works.
 
+## MCP servers
+
+The chat can also use remote MCP servers: your own, or a hosted service that connects other apps (mail, chat, calendars) and gives you an MCP address and token. Add them in Settings > MCP servers, each with a name, an https address and, if it needs one, a token (sent as a bearer token).
+
+- **Anthropic calls them, not your device**, so they work on mobile too, and each must be reachable from the internet. Anthropic chats only, for now.
+- **Their tools run without asking first.** Only add servers you trust, and where a service lets you pick which actions it offers, offer only what you need.
+- **Tokens stay on the device** they were entered on, in [SecretStorage](https://docs.obsidian.md/plugins/guides/secret-storage), like API keys: enter them on each device. The server list itself syncs.
+- Each call shows in the chat as a tool row. Servers that need a sign-in (OAuth) aren't supported yet: a token that expires stops working until you paste a new one.
+
 ## Install
 
 ### Via BRAT (recommended for now)
