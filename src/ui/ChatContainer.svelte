@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { App, Component as ObsidianComponent, TFile } from "obsidian";
-  import { Keymap, MarkdownRenderer, Menu, Notice, Platform, displayTooltip, parseLinktext, prepareFuzzySearch, setTooltip } from "obsidian";
+  import { Keymap, MarkdownRenderer, Menu, Notice, Platform, displayTooltip, parseLinktext, prepareFuzzySearch, setIcon, setTooltip } from "obsidian";
   import type { NamedSkill, ToolResult, SelectionScope, ContextUsage } from "../types";
   import type { ContextBudget } from "../api/compaction";
   import { lineDiff } from "../util/diff";
@@ -30,6 +30,7 @@
     onStop: () => void;
     onNewSession: () => void;
     onSelectSession: (id: string) => void;
+    onRenameSession: () => void;
     /** Asked for just before the dropdown opens, so its list is current. */
     onRefreshSessions: () => void;
     /** Whether typing [[ suggests files; read live so the setting applies at once. */
@@ -50,6 +51,7 @@
     onStop,
     onNewSession,
     onSelectSession,
+    onRenameSession,
     onRefreshSessions,
     fileLinkMenuEnabled,
     skillFiles,
@@ -280,6 +282,12 @@
     const options = { delay: 400 };
     setTooltip(node, text, options);
     return { update: (next: string) => setTooltip(node, next, options) };
+  }
+
+  /** An Obsidian (Lucide) icon. */
+  function icon(node: HTMLElement, name: string) {
+    setIcon(node, name);
+    return { update: (next: string) => setIcon(node, next) };
   }
 
   /** 850, 4.2k, 252.9k, 1M, 1.2M */
@@ -912,6 +920,13 @@
       {:else}
         <span class="ochat-header-title" title={displayTitle}>{displayTitle}</span>
       {/if}
+      <button
+        class="ochat-rename clickable-icon"
+        aria-label="Rename chat"
+        use:tooltip={"Rename chat"}
+        use:icon={"pencil"}
+        onclick={onRenameSession}
+      ></button>
       <span class="ochat-header-model" use:tooltip={displayModel || "No model"}>{displayModel || "No model"}</span>
       {#if context}
         <!-- Context meter: a ring that fills toward the model's limit. Hover
@@ -1179,6 +1194,18 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .ochat-rename {
+    align-self: center;
+    flex-shrink: 0;
+    padding: 4px;
+    color: var(--text-faint);
+  }
+
+  .ochat-rename :global(svg) {
+    width: 14px;
+    height: 14px;
   }
 
   /* ─── Context meter ─────────────────────────────────────────────────── */

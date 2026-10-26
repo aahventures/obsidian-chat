@@ -15,6 +15,7 @@ import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore, fromForkSessionsFile } from "./sessions";
 import { SessionSwitcherModal } from "./ui/session-switcher";
+import { RenameChatModal } from "./ui/rename-modal";
 
 const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
 /** Written by a fork of this plugin that had sessions first; imported once. */
@@ -66,6 +67,9 @@ export default class ChatPlugin extends Plugin {
           item.setTitle("Switch chat").setIcon("list").onClick(() => this.openSessionSwitcher())
         );
         menu.addItem((item) =>
+          item.setTitle("Rename chat").setIcon("pencil").onClick(() => this.renameCurrentChat())
+        );
+        menu.addItem((item) =>
           item.setTitle("Chat about active note").setIcon("file-text").onClick(() => this.chatAboutActiveNote())
         );
         menu.addItem((item) =>
@@ -106,6 +110,12 @@ export default class ChatPlugin extends Plugin {
       id: "delete-chat",
       name: "Delete this chat",
       callback: () => this.deleteCurrentChat(),
+    });
+
+    this.addCommand({
+      id: "rename-chat",
+      name: "Rename this chat",
+      callback: () => this.renameCurrentChat(),
     });
 
     this.addCommand({
@@ -301,6 +311,25 @@ export default class ChatPlugin extends Plugin {
     this.sessions.delete(sessionId);
     view.leaf.detach();
     new Notice(`Deleted "${title}".`);
+  }
+
+  /** Ask for a new name for a session. */
+  renameSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    new RenameChatModal(this.app, session.title, (name) =>
+      this.sessions.rename(sessionId, name)
+    ).open();
+  }
+
+  /** Rename the focused chat. */
+  private renameCurrentChat(): void {
+    const sessionId = this.getTargetForDestructiveCommand()?.getSessionId();
+    if (!sessionId) {
+      new Notice("Focus the chat you want to rename.");
+      return;
+    }
+    this.renameSession(sessionId);
   }
 
   // ─── Panes ────────────────────────────────────────────────────────────

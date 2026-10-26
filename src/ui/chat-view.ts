@@ -96,6 +96,9 @@ export class ObsidianChatView extends ItemView {
         onStop: () => this.handleStop(),
         onNewSession: () => void this.plugin.newChat(this),
         onSelectSession: (id: string) => void this.plugin.revealSession(id, this),
+        onRenameSession: () => {
+          if (this.sessionId) this.plugin.renameSession(this.sessionId);
+        },
         // Sessions change outside this pane too (created, discarded, deleted,
         // renamed elsewhere), so refresh the list whenever it's opened.
         onRefreshSessions: () => this.refreshSwitcher(),

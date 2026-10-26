@@ -90,6 +90,7 @@ Skills are saved instructions for a kind of task, in Claude Code's format: a fol
 | Send selection to Chat | Send selected text with scoped context |
 | Copy conversation transcript | Export the active session's conversation to clipboard |
 | Clear conversation | Empty the active session (keeps the session) |
+| Rename this chat | Give the focused chat a name of your own |
 
 ## Chat sessions
 
@@ -99,6 +100,10 @@ its own agent state, so context never carries between them.
 - **New chat** starts a session; existing ones keep their history.
 - Once more than one session exists, a dropdown appears in the chat header to
   switch between them. Sessions are named after their first message.
+- **Rename** a chat with the pencil beside its name in the header, the
+  "Rename this chat" command, or the ribbon icon's right-click menu. A name
+  you give stays until the chat is cleared; leave it blank to go back to
+  naming it after the first message.
 - Sessions are **not** scoped to a note — a chat can range across the whole
   vault, which is the point of the plugin. "Chat about this note" and "Send
   selection to Chat" start a new session rather than interrupting the one

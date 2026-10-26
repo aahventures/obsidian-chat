@@ -70,9 +70,14 @@ export class ChatSession {
     this.agent = new AgentLoop(app, settings);
   }
 
-  /** Nothing has been said in this session and nothing is happening in it. */
+  /**
+   * Nothing has been said in this session, nothing is happening in it, and it
+   * hasn't been named. A chat named before its first message is kept.
+   */
   get isEmpty(): boolean {
-    return this.chatHistory.length === 0 && !this.running && !this.askResolve;
+    return (
+      this.chatHistory.length === 0 && !this.running && !this.askResolve && this.title === UNTITLED
+    );
   }
 
   /**
@@ -85,6 +90,22 @@ export class ChatSession {
     if (!flat) return;
     this.title =
       flat.length > MAX_TITLE_LENGTH ? `${flat.slice(0, MAX_TITLE_LENGTH - 1)}…` : flat;
+  }
+
+  /**
+   * Name the session. A blank name goes back to the derived title, from the
+   * first message if there is one. A name is kept until the next Clear, and
+   * the first message doesn't replace it.
+   */
+  rename(name: string): void {
+    const flat = name.replace(/\s+/g, " ").trim();
+    if (flat) {
+      this.title = flat;
+      return;
+    }
+    this.title = UNTITLED;
+    const first = this.chatHistory.find((e) => e.type === "user" && e.text);
+    if (first?.text) this.maybeTitleFrom(first.text);
   }
 
   touch(): void {
@@ -269,6 +290,20 @@ export class SessionStore {
     this.emit(session, { kind: "cleared" });
     this.emit(session, { kind: "context" });
     this.emit(session, { kind: "running", running: false });
+    this.onChange();
+  }
+
+  /**
+   * Rename a session. Its place in the switcher stays, since a rename isn't
+   * using the chat.
+   */
+  rename(id: string, name: string): void {
+    const session = this.get(id);
+    if (!session) return;
+    const title = session.title;
+    session.rename(name);
+    if (session.title === title) return;
+    this.emit(session, { kind: "title", title: session.title });
     this.onChange();
   }
 
