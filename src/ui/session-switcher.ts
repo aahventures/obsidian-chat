@@ -56,7 +56,7 @@ export class SessionSwitcherModal extends SuggestModal<ChatSession> {
 
     return sessions.filter(
       (session) =>
-        session.title.toLowerCase().includes(needle) ||
+        session.displayTitle.toLowerCase().includes(needle) ||
         preview(session).toLowerCase().includes(needle)
     );
   }
@@ -65,7 +65,7 @@ export class SessionSwitcherModal extends SuggestModal<ChatSession> {
     el.addClass("ochat-session-item");
 
     const titleRow = el.createDiv({ cls: "ochat-session-item-title" });
-    titleRow.createSpan({ text: session.title });
+    titleRow.createSpan({ text: session.displayTitle });
 
     const status = statusLabel(session);
     if (status) {

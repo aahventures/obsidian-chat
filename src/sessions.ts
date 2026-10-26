@@ -24,6 +24,7 @@ const MAX_SESSIONS = 20;
 /** Longest auto-derived title before ellipsis. */
 const MAX_TITLE_LENGTH = 40;
 
+/** Shown for a session with no title yet. Display only: such a title is saved empty. */
 const UNTITLED = "New chat";
 
 /** How a trim notice starts, so a new trim replaces it and leaves other notices be. */
@@ -37,7 +38,8 @@ type SessionListener = (event: SessionEvent) => void;
  */
 export class ChatSession {
   readonly id: string;
-  title: string;
+  /** Empty until named, by the first message or by hand. Shown as `displayTitle`. */
+  title = "";
   readonly createdAt: number;
   updatedAt: number;
   chatHistory: ChatHistoryEntry[] = [];
@@ -66,8 +68,11 @@ export class ChatSession {
     this.id = id ?? uniqueId("s");
     this.createdAt = createdAt ?? Date.now();
     this.updatedAt = this.createdAt;
-    this.title = UNTITLED;
     this.agent = new AgentLoop(app, settings);
+  }
+
+  get displayTitle(): string {
+    return this.title || UNTITLED;
   }
 
   /**
@@ -75,9 +80,7 @@ export class ChatSession {
    * hasn't been named. A chat named before its first message is kept.
    */
   get isEmpty(): boolean {
-    return (
-      this.chatHistory.length === 0 && !this.running && !this.askResolve && this.title === UNTITLED
-    );
+    return this.chatHistory.length === 0 && !this.running && !this.askResolve && !this.title;
   }
 
   /**
@@ -85,7 +88,7 @@ export class ChatSession {
    * rather than model-generated so that opening a chat never costs a call.
    */
   maybeTitleFrom(text: string): void {
-    if (this.title !== UNTITLED) return;
+    if (this.title) return;
     const flat = text.replace(/\s+/g, " ").trim();
     if (!flat) return;
     this.title =
@@ -145,7 +148,7 @@ export class ChatSession {
 
   static fromSnapshot(app: App, settings: ChatSettings, snap: SessionSnapshot): ChatSession {
     const session = new ChatSession(app, settings, snap.id, snap.createdAt);
-    session.title = snap.title || UNTITLED;
+    session.title = typeof snap.title === "string" ? snap.title : "";
     session.updatedAt = snap.updatedAt ?? snap.createdAt ?? Date.now();
     session.chatHistory = Array.isArray(snap.chatHistory) ? snap.chatHistory : [];
     if (Array.isArray(snap.agentMessages)) {
@@ -258,7 +261,7 @@ export class SessionStore {
   /**
    * Empty a session in place. This keeps the session (and its position in the
    * switcher) rather than deleting it, which is what the command has always
-   * meant. The title goes back to untitled so the next message names it,
+   * meant. The title goes back to empty so the next message names it,
    * instead of the switcher labeling it after the conversation just cleared.
    */
   clearMessages(id: string): void {
@@ -268,7 +271,7 @@ export class SessionStore {
     session.agent.clear();
     session.chatHistory = [];
     session.context = null;
-    session.title = UNTITLED;
+    session.title = "";
     session.touch();
     this.emit(session, { kind: "title", title: session.title });
     this.emit(session, { kind: "cleared" });
@@ -519,7 +522,7 @@ export class SessionStore {
     const sessions = [...ours, ...theirs].sort((a, b) => b.updatedAt - a.updatedAt);
 
     return {
-      version: 2,
+      version: 3,
       // Panes remember their own session now. This only tells an older version
       // of the plugin which chat to show if someone downgrades.
       activeSessionId: sessions[0]?.id ?? null,
@@ -546,7 +549,7 @@ export class SessionStore {
     }
 
     if (Array.isArray(state.sessions)) {
-      for (const snap of state.sessions) {
+      for (const snap of fromLegacyTitles(state.version, state.sessions)) {
         if (!snap || typeof snap.id !== "string" || this.deletedIds.has(snap.id)) continue;
         this.sessions.push(ChatSession.fromSnapshot(this.app, this.settings, snap));
       }
@@ -578,15 +581,26 @@ function asPersisted(raw: unknown): PersistedChatState | null {
   const state = raw as Partial<PersistedChatState> | null;
   if (!state || typeof state !== "object" || !Array.isArray(state.sessions)) return null;
   return {
-    version: 2,
+    version: 3,
     activeSessionId: null,
-    sessions: state.sessions.filter(
-      (s): s is SessionSnapshot => !!s && typeof s.id === "string"
+    sessions: fromLegacyTitles(
+      state.version,
+      state.sessions.filter((s): s is SessionSnapshot => !!s && typeof s.id === "string")
     ),
     deleted: Array.isArray(state.deleted)
       ? state.deleted.filter((id): id is string => typeof id === "string")
       : [],
   };
+}
+
+/**
+ * Files before version 3, written by an older version of the plugin here or on
+ * another device, save an untitled session as "New chat". Nobody could name a
+ * chat then, so that title is the placeholder, and reads as untitled.
+ */
+function fromLegacyTitles(version: unknown, sessions: SessionSnapshot[]): SessionSnapshot[] {
+  if (version === 3) return sessions;
+  return sessions.map((s) => (s?.title === UNTITLED ? { ...s, title: "" } : s));
 }
 
 /**

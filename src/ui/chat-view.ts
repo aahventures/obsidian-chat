@@ -50,7 +50,7 @@ export class ObsidianChatView extends ItemView {
 
   getDisplayText(): string {
     const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
-    return session?.title || "Chat";
+    return session?.displayTitle ?? "Chat";
   }
 
   /** Which session this pane shows. */
@@ -221,9 +221,9 @@ export class ObsidianChatView extends ItemView {
 
   private refreshSwitcher(): void {
     const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
-    this.chatContainer?.setTitle(session?.title ?? "Chat");
+    this.chatContainer?.setTitle(session?.displayTitle ?? "Chat");
     this.chatContainer?.setSessions(
-      this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.title })),
+      this.plugin.sessions.list().map((s) => ({ id: s.id, title: s.displayTitle })),
       this.sessionId ?? ""
     );
   }

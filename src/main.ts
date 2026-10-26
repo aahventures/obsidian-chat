@@ -307,7 +307,7 @@ export default class ChatPlugin extends Plugin {
       new Notice("Focus the chat you want to delete.");
       return;
     }
-    const title = this.sessions.get(sessionId)?.title ?? "chat";
+    const title = this.sessions.get(sessionId)?.displayTitle ?? "chat";
     this.sessions.delete(sessionId);
     view.leaf.detach();
     new Notice(`Deleted "${title}".`);

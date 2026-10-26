@@ -258,7 +258,8 @@ export interface SessionSnapshot {
 
 /** Shape of `chat-state.json` since multi-session support. */
 export interface PersistedChatState {
-  version: 2;
+  /** 3: an untitled session's title is saved empty, where 2 saved "New chat". */
+  version: 2 | 3;
   activeSessionId: string | null;
   sessions: SessionSnapshot[];
   /**
