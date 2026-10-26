@@ -227,7 +227,7 @@ export class SessionStore {
 
     const title = session.title;
     session.maybeTitleFrom(text);
-    if (session.title !== title) this.emit(session, { kind: "title", title: session.displayTitle });
+    if (session.title !== title) this.emit(session, { kind: "title" });
 
     try {
       await session.agent.run(text, this.callbacks(session), selection);
@@ -273,7 +273,7 @@ export class SessionStore {
     session.context = null;
     session.title = "";
     session.touch();
-    this.emit(session, { kind: "title", title: session.displayTitle });
+    this.emit(session, { kind: "title" });
     this.emit(session, { kind: "cleared" });
     this.emit(session, { kind: "context" });
     this.emit(session, { kind: "running", running: false });
@@ -290,7 +290,7 @@ export class SessionStore {
     // A blank name changes nothing, like Cancel.
     if (!session || !title || title === session.title) return;
     session.title = title;
-    this.emit(session, { kind: "title", title: session.displayTitle });
+    this.emit(session, { kind: "title" });
     this.onChange();
   }
 

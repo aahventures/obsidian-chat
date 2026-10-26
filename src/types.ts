@@ -239,7 +239,8 @@ export type SessionEvent =
   | { kind: "thinking"; on: boolean }
   | { kind: "ask-user"; question: string }
   | { kind: "running"; running: boolean }
-  | { kind: "title"; title: string }
+  /** The title changed; panes read it, and how it's shown, from the session. */
+  | { kind: "title" }
   | { kind: "trimmed" }
   | { kind: "user-skills"; skills: NamedSkill[] }
   | { kind: "context" }

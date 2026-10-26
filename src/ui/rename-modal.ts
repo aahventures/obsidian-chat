@@ -1,18 +1,20 @@
 import { App, Modal, Setting } from "obsidian";
+import type { ChatSession } from "../sessions";
 
 /** Ask for a chat's new name. Enter or Save applies it; a blank name changes nothing. */
 export class RenameChatModal extends Modal {
   private name: string;
+  /** What the chat is shown as, for an empty field: an untitled chat's "New chat". */
+  private shown: string;
 
   constructor(
     app: App,
-    current: string,
-    /** What the chat is shown as, for an empty field: an untitled chat's "New chat". */
-    private shown: string,
+    session: ChatSession,
     private onRename: (name: string) => void
   ) {
     super(app);
-    this.name = current;
+    this.name = session.title;
+    this.shown = session.displayTitle;
   }
 
   onOpen(): void {

@@ -314,9 +314,7 @@ export default class ChatPlugin extends Plugin {
   renameSession(sessionId: string): void {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    new RenameChatModal(this.app, session.title, session.displayTitle, (name) =>
-      this.sessions.rename(sessionId, name)
-    ).open();
+    new RenameChatModal(this.app, session, (name) => this.sessions.rename(sessionId, name)).open();
   }
 
   /** Rename the focused chat. */
