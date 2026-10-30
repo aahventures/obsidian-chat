@@ -831,11 +831,16 @@
     event.preventDefault();
     event.stopPropagation();
 
-    const sourcePath = app.workspace.getActiveFile()?.path ?? "";
+    const activePath = app.workspace.getActiveFile()?.path ?? "";
+    // Obsidian 1.14.4+ opens notes from outside the vault, with a `file:` path,
+    // and resolves links from one only beside it on disk, never in the vault.
+    // The chat's links point into the vault, so they resolve from its root then.
+    const vaultSource = activePath.startsWith("file:") ? "" : activePath;
     // A subpath-only link (`[[#Heading]]`) targets the current note itself.
+    const sourcePath = (text: string) => (text.split("#")[0] ? vaultSource : activePath);
     const resolves = (text: string) => {
       const target = text.split("#")[0];
-      return !target || app.metadataCache.getFirstLinkpathDest(target, sourcePath) !== null;
+      return !target || app.metadataCache.getFirstLinkpathDest(target, vaultSource) !== null;
     };
     // Markdown links can arrive percent-encoded and wikilinks never do, but
     // the anchor does not say which this was. Try the text as written first,
@@ -846,7 +851,7 @@
       return;
     }
 
-    void app.workspace.openLinkText(linktext, sourcePath, panePreference(event));
+    void app.workspace.openLinkText(linktext, sourcePath(linktext), panePreference(event));
   }
 
   function formatToolName(name: string): string {
