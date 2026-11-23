@@ -14,6 +14,12 @@
   min-width: 280px;
 }
 
+/* ─── Rename chat modal ─────────────────────────────────────────────────── */
+
+.ochat-rename-input {
+  width: 100%;
+}
+
 /* ─── Session switcher (SuggestModal rows) ───────────────────────────────── */
 
 .ochat-session-item-title {
