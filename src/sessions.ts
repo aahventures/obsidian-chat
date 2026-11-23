@@ -75,9 +75,12 @@ export class ChatSession {
     return this.title || UNTITLED;
   }
 
-  /** Nothing has been said in this session and nothing is happening in it. */
+  /**
+   * Nothing has been said in this session, nothing is happening in it, and it
+   * hasn't been named. A chat named before its first message is kept.
+   */
   get isEmpty(): boolean {
-    return this.chatHistory.length === 0 && !this.running && !this.askResolve;
+    return this.chatHistory.length === 0 && !this.running && !this.askResolve && !this.title;
   }
 
   /**
@@ -274,6 +277,20 @@ export class SessionStore {
     this.emit(session, { kind: "cleared" });
     this.emit(session, { kind: "context" });
     this.emit(session, { kind: "running", running: false });
+    this.onChange();
+  }
+
+  /**
+   * Rename a session. Its place in the switcher stays, since a rename isn't
+   * using the chat.
+   */
+  rename(id: string, name: string): void {
+    const session = this.get(id);
+    const title = name.replace(/\s+/g, " ").trim();
+    // A blank name changes nothing, like Cancel.
+    if (!session || !title || title === session.title) return;
+    session.title = title;
+    this.emit(session, { kind: "title" });
     this.onChange();
   }
 

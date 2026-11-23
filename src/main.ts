@@ -15,6 +15,7 @@ import { ChatSettingTab, getModelDisplayName } from "./settings";
 import { ObsidianChatView, VIEW_TYPE_CHAT } from "./ui/chat-view";
 import { SessionStore, fromForkSessionsFile } from "./sessions";
 import { SessionSwitcherModal } from "./ui/session-switcher";
+import { RenameChatModal } from "./ui/rename-modal";
 
 const STATE_PATH = ".obsidian/plugins/obsidian-chat/chat-state.json";
 /** Written by a fork of this plugin that had sessions first; imported once. */
@@ -106,6 +107,12 @@ export default class ChatPlugin extends Plugin {
       id: "delete-chat",
       name: "Delete this chat",
       callback: () => this.deleteCurrentChat(),
+    });
+
+    this.addCommand({
+      id: "rename-chat",
+      name: "Rename this chat",
+      callback: () => this.renameCurrentChat(),
     });
 
     this.addCommand({
@@ -293,7 +300,7 @@ export default class ChatPlugin extends Plugin {
 
   /** Delete the focused chat and close its pane. */
   private deleteCurrentChat(): void {
-    const view = this.getTargetForDestructiveCommand();
+    const view = this.getTargetChat();
     const sessionId = view?.getSessionId();
     if (!view || !sessionId) {
       new Notice("Focus the chat you want to delete.");
@@ -303,6 +310,23 @@ export default class ChatPlugin extends Plugin {
     this.sessions.delete(sessionId);
     view.leaf.detach();
     new Notice(`Deleted "${title}".`);
+  }
+
+  /** Ask for a new name for a session. */
+  renameSession(sessionId: string): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    new RenameChatModal(this.app, session, (name) => this.sessions.rename(sessionId, name)).open();
+  }
+
+  /** Rename the focused chat. */
+  private renameCurrentChat(): void {
+    const sessionId = this.getTargetChat()?.getSessionId();
+    if (!sessionId) {
+      new Notice("Focus the chat you want to rename.");
+      return;
+    }
+    this.renameSession(sessionId);
   }
 
   // ─── Panes ────────────────────────────────────────────────────────────
@@ -463,12 +487,12 @@ export default class ChatPlugin extends Plugin {
   }
 
   /**
-   * The pane a destructive command should act on, or null if that would be a
-   * guess. With several panes open and focus in a note, the first pane in
-   * layout order is rarely the conversation in front of you, so only a
-   * focused pane, or the only one, counts.
+   * The pane a command for one chat (clear, delete, rename) should act on, or
+   * null if that would be a guess. With several panes open and focus in a
+   * note, the first pane in layout order is rarely the conversation in front
+   * of you, so only a focused pane, or the only one, counts.
    */
-  private getTargetForDestructiveCommand(): ObsidianChatView | null {
+  private getTargetChat(): ObsidianChatView | null {
     const active = this.app.workspace.getActiveViewOfType(ObsidianChatView);
     if (active) return active;
     const open = this.getChatViews();
@@ -501,7 +525,7 @@ export default class ChatPlugin extends Plugin {
    * command has always meant.
    */
   private clearChat(): void {
-    const view = this.getTargetForDestructiveCommand();
+    const view = this.getTargetChat();
     if (view) {
       view.clearConversation();
       new Notice("Conversation cleared.");
