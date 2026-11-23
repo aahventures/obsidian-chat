@@ -7,6 +7,8 @@ import type {
   AgentCallbacks,
   SelectionScope,
   ToolResult,
+  WebSearch,
+  WebSource,
 } from "../types";
 import { resolveModel } from "../types";
 import { sendMessage } from "../api/client";
@@ -67,6 +69,31 @@ export function trimToTurns(messages: UnifiedMessage[], max = messages.length): 
     if (!starts(messages[start])) return [];
   }
   return start === 0 ? messages : messages.slice(start);
+}
+
+/** A web search as a tool row's result: its pages as links, or why it failed. */
+function searchResult(search: WebSearch): ToolResult {
+  if (search.error) {
+    return { result: `The search failed (${search.error}).`, isError: true };
+  }
+  if (search.results.length === 0) {
+    return { result: "The search ran. The provider didn't list the pages it found.", isError: false };
+  }
+  return {
+    result: search.results.map((r) => `${r.title}\n${r.url}`).join("\n\n"),
+    isError: false,
+    links: search.results,
+  };
+}
+
+/** Markdown for the pages a reply cites, after it; nothing when it cites none. */
+export function sourcesFooter(sources: WebSource[]): string {
+  if (sources.length === 0) return "";
+  // Brackets would end the link text early; spaces and parentheses the URL.
+  const title = (t: string) => t.replace(/([\[\]\\])/g, "\\$1").replace(/\s+/g, " ").trim();
+  const url = (u: string) => u.replace(/ /g, "%20").replace(/\(/g, "%28").replace(/\)/g, "%29");
+  const lines = sources.map((s, i) => `${i + 1}. [${title(s.title)}](${url(s.url)})`);
+  return `\n\n---\n**Sources**\n${lines.join("\n")}`;
 }
 
 /**
@@ -351,6 +378,14 @@ export class AgentLoop {
         });
       }
 
+      // The provider's own web searches, as rows like any other tool, so it's
+      // plain to see whether a search ran. They ran before the reply's text.
+      for (const search of response.searches ?? []) {
+        const id = uniqueId("search-");
+        callbacks.onToolCall(id, "web_search", { query: search.query });
+        callbacks.onToolResult(id, "web_search", searchResult(search));
+      }
+
       // Process response content blocks
       const toolCalls: ContentBlock[] = [];
       const textParts: string[] = [];
@@ -366,8 +401,11 @@ export class AgentLoop {
       // Emit any text before tool calls (skip if ask_user is coming to avoid
       // rendering the question twice: once as text and once via showAskUser)
       const hasAskUser = toolCalls.some((tc) => tc.name === "ask_user");
+      // Shown with the pages it cites, so a claim can be checked. Only on screen:
+      // the history keeps the text as the model wrote it.
+      const shown = () => textParts.join("") + sourcesFooter(response.sources ?? []);
       if (textParts.length > 0 && toolCalls.length > 0 && !hasAskUser) {
-        callbacks.onResponse(textParts.join(""));
+        callbacks.onResponse(shown());
       }
 
       // Append assistant message to history
@@ -379,7 +417,7 @@ export class AgentLoop {
       // If no tool calls, we're done
       if (toolCalls.length === 0) {
         if (textParts.length > 0) {
-          callbacks.onResponse(textParts.join(""));
+          callbacks.onResponse(shown());
         }
         return;
       }

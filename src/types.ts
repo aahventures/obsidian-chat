@@ -97,6 +97,24 @@ export interface UnifiedResponse {
   };
   /** The model that answered, as the API names it. */
   model?: string;
+  /** Web searches the provider ran for this response, in order. */
+  searches?: WebSearch[];
+  /** Pages the response's text cites, once each, in the order first cited. */
+  sources?: WebSource[];
+}
+
+/** A web page, as a search result or a citation. */
+export interface WebSource {
+  title: string;
+  url: string;
+}
+
+/** One server-side web search: what was searched and what came back. */
+export interface WebSearch {
+  query: string;
+  results: WebSource[];
+  /** The search failed (the provider's error code), so `results` is empty. */
+  error?: string;
 }
 
 // ─── Conversation Context ───────────────────────────────────────────────────
@@ -133,6 +151,8 @@ export interface ToolResult {
   path?: string;
   /** The link's text, when the file name alone wouldn't say what was used (a skill's SKILL.md). */
   label?: string;
+  /** Web pages the result lists (a web search's results), shown as links. */
+  links?: WebSource[];
   /** Optional before/after snapshot for rendering an edit diff in the UI. */
   diff?: {
     path: string;

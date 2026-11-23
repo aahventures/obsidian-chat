@@ -5,6 +5,8 @@ import type {
   UnifiedToolDef,
   UnifiedResponse,
   ContentBlock,
+  WebSearch,
+  WebSource,
 } from "../types";
 import { resolveModel } from "../types";
 import { compactionThreshold, summariesAsText } from "./compaction";
@@ -129,11 +131,14 @@ export async function sendAnthropicMessage(
   }
 
   const data = response.json;
+  const blocks = data.content as AnthropicContentBlock[];
 
   return {
-    content: (data.content as AnthropicContentBlock[])
+    content: blocks
       .map(fromAnthropicBlock)
       .filter((b): b is ContentBlock => b !== null),
+    searches: searchesOf(blocks),
+    sources: citedSources(blocks),
     stopReason: data.stop_reason === "end_turn" ? "end_turn" : data.stop_reason,
     model: typeof data.model === "string" ? data.model : undefined,
     usage: data.usage
@@ -153,13 +158,72 @@ export async function sendAnthropicMessage(
 interface AnthropicContentBlock {
   type: "text" | "tool_use" | "web_search_tool_result" | "server_tool_use" | "thinking" | "compaction";
   text?: string;
-  /** A compaction block's summary. */
-  content?: string | null;
+  /**
+   * A compaction block's summary; a web_search_tool_result's results (a list),
+   * or its error (an object).
+   */
+  content?: string | null | AnthropicSearchResult[] | { type?: string; error_code?: string };
+  /** On a web_search_tool_result: the server_tool_use it answers. */
+  tool_use_id?: string;
+  /** On a text block: where its claims come from. */
+  citations?: Array<{ type?: string; url?: string; title?: string | null }> | null;
   thinking?: string;
   id?: string;
   name?: string;
   input?: Record<string, unknown>;
-  search_results?: Array<{ title: string; url: string; snippet: string }>;
+}
+
+interface AnthropicSearchResult {
+  type?: string;
+  url?: string;
+  title?: string;
+}
+
+/**
+ * The searches the response ran, each with what it searched for (from its
+ * server_tool_use) and what came back. Shown as rows, so the user can see
+ * whether a search really happened. Not kept in the history: the model's
+ * reply carries what it took from them, as before.
+ */
+function searchesOf(blocks: AnthropicContentBlock[]): WebSearch[] {
+  const queries = new Map<string, string>();
+  for (const b of blocks) {
+    if (b.type === "server_tool_use" && b.name === "web_search" && b.id) {
+      const q = b.input?.query;
+      queries.set(b.id, typeof q === "string" ? q : "");
+    }
+  }
+  const searches: WebSearch[] = [];
+  for (const b of blocks) {
+    if (b.type !== "web_search_tool_result") continue;
+    const query = queries.get(b.tool_use_id ?? "") ?? "";
+    // A list on success; an object with an error_code on failure (still HTTP 200).
+    if (Array.isArray(b.content)) {
+      searches.push({
+        query,
+        results: b.content
+          .filter((r) => typeof r.url === "string" && r.url)
+          .map((r) => ({ title: r.title || r.url!, url: r.url! })),
+      });
+    } else {
+      const code = b.content && typeof b.content === "object" ? b.content.error_code : undefined;
+      searches.push({ query, results: [], error: code || "unknown_error" });
+    }
+  }
+  return searches;
+}
+
+/** The pages the text cites, once each, in the order first cited. */
+function citedSources(blocks: AnthropicContentBlock[]): WebSource[] {
+  const seen = new Map<string, WebSource>();
+  for (const b of blocks) {
+    if (b.type !== "text" || !b.citations) continue;
+    for (const c of b.citations) {
+      if (c.type !== "web_search_result_location" || !c.url || seen.has(c.url)) continue;
+      seen.set(c.url, { title: c.title || c.url, url: c.url });
+    }
+  }
+  return [...seen.values()];
 }
 
 /**
@@ -229,6 +293,14 @@ function fromAnthropicBlock(block: AnthropicContentBlock): ContentBlock | null {
   if (block.type === "compaction") {
     return typeof block.content === "string" ? { type: "compaction", content: block.content } : null;
   }
+  // Server-side search: reported separately (searchesOf), not part of the history.
+  if (
+    block.type === "web_search_tool_result" ||
+    block.type === "server_tool_use" ||
+    block.type === "thinking"
+  ) {
+    return null;
+  }
   if (block.type === "tool_use") {
     return {
       type: "tool_use",
@@ -236,17 +308,6 @@ function fromAnthropicBlock(block: AnthropicContentBlock): ContentBlock | null {
       name: block.name,
       input: block.input,
     };
-  }
-  // Web search results are server-managed; render as text for the user
-  if (block.type === "web_search_tool_result" && block.search_results) {
-    const formatted = block.search_results
-      .map((r) => `**${r.title}**\n${r.url}\n${r.snippet}`)
-      .join("\n\n");
-    return { type: "text", text: formatted };
-  }
-  // Thinking and server_tool_use blocks are internal; don't surface to user
-  if (block.type === "thinking" || block.type === "server_tool_use") {
-    return null;
   }
   // Skip blocks with no text content (safety net)
   if (!block.text) {

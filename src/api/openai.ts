@@ -6,6 +6,8 @@ import type {
   UnifiedResponse,
   ContentBlock,
   OpenAIConversationState,
+  WebSearch,
+  WebSource,
 } from "../types";
 import { resolveModel } from "../types";
 import { splitCachedInput } from "./usage";
@@ -189,6 +191,8 @@ function buildCurrentTurnInput(
 function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
   const output = (data.output || []) as Array<Record<string, unknown>>;
   const content: ContentBlock[] = [];
+  const searches: WebSearch[] = [];
+  const sources = new Map<string, WebSource>();
   let hasToolCalls = false;
 
   for (const item of output) {
@@ -196,8 +200,28 @@ function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
       for (const part of item.content as Array<Record<string, unknown>>) {
         if (part.type === "output_text" && typeof part.text === "string") {
           content.push({ type: "text", text: part.text });
+          // The pages the text cites.
+          const annotations = Array.isArray(part.annotations)
+            ? (part.annotations as Array<Record<string, unknown>>)
+            : [];
+          for (const a of annotations) {
+            if (a.type !== "url_citation" || typeof a.url !== "string" || sources.has(a.url)) continue;
+            sources.set(a.url, { title: typeof a.title === "string" && a.title ? a.title : a.url, url: a.url });
+          }
         }
       }
+    } else if (item.type === "web_search_call") {
+      // The query is in `action` when the API reports it; its result pages only
+      // with `include`, which isn't asked for, so they show up as citations.
+      const action = (item.action ?? {}) as Record<string, unknown>;
+      const listed = Array.isArray(action.sources) ? (action.sources as Array<Record<string, unknown>>) : [];
+      searches.push({
+        query: typeof action.query === "string" ? action.query : "",
+        results: listed
+          .filter((r) => typeof r.url === "string")
+          .map((r) => ({ title: typeof r.title === "string" && r.title ? r.title : (r.url as string), url: r.url as string })),
+        ...(item.status === "failed" ? { error: "failed" } : {}),
+      });
     } else if (item.type === "function_call") {
       hasToolCalls = true;
       let input: Record<string, unknown> = {};
@@ -225,6 +249,8 @@ function fromResponsesOutput(data: Record<string, unknown>): UnifiedResponse {
     | undefined;
   return {
     content,
+    searches,
+    sources: [...sources.values()],
     stopReason,
     model: typeof data.model === "string" ? data.model : undefined,
     usage: usage

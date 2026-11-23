@@ -840,6 +840,15 @@
     return name.replace(/_/g, " ");
   }
 
+  /** A link's site, so a result list shows where each page is from. */
+  function hostOf(url: string): string {
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  }
+
   /**
    * Short, readable label for a vault path: the file name, without the `.md`
    * that every note carries. The full path stays in the link's tooltip.
@@ -975,6 +984,9 @@
               {msg.toolResult?.isError ? "\u2718" : "\u2714"}
             </span>
             <span class="ochat-tool-name">{formatToolName(msg.toolName ?? "")}</span>
+            {#if msg.toolName === "web_search" && typeof msg.toolInput?.query === "string" && msg.toolInput.query}
+              <span class="ochat-search-query" title={msg.toolInput.query}>{msg.toolInput.query}</span>
+            {/if}
             {#if msg.toolResult?.path}
               {@const path = msg.toolResult.path}
               <a
@@ -1007,6 +1019,15 @@
                   </div>
                 {/each}
               </div>
+            {:else if msg.toolResult?.links?.length}
+              <ol class="ochat-search-results">
+                {#each msg.toolResult.links as link}
+                  <li>
+                    <a class="external-link" href={link.url} title={link.url} target="_blank" rel="noopener noreferrer">{link.title}</a>
+                    <span class="ochat-search-host">{hostOf(link.url)}</span>
+                  </li>
+                {/each}
+              </ol>
             {:else}
               <pre class="ochat-tool-json">{truncate(msg.toolResult?.result ?? "", 2000)}</pre>
             {/if}
@@ -1375,6 +1396,30 @@
   }
 
   /* ─── Tool Calls ────────────────────────────────────────────────────── */
+  .ochat-search-query {
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .ochat-search-results {
+    margin: 4px 0;
+    padding-left: 20px;
+    font-size: var(--font-ui-smaller);
+  }
+
+  .ochat-search-results li {
+    margin: 2px 0;
+    overflow-wrap: anywhere;
+  }
+
+  .ochat-search-host {
+    color: var(--text-faint);
+    margin-left: 4px;
+  }
+
   .ochat-tool-call {
     align-self: flex-start;
     padding: 6px 10px;
