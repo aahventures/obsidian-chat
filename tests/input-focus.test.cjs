@@ -4,54 +4,84 @@ const { test } = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-// Use the actual input handlers and view lifecycle, with a synthetic host and
-// controllable response promises. Browser checks also exercise native focus.
+// Use the actual input handlers, the real SessionStore that runs turns, and the
+// pane that listens to it, with a synthetic host and a fake agent whose turns
+// end when the test says. Browser checks also exercise native focus.
 const component = fs.readFileSync('src/ui/ChatContainer.svelte', 'utf8');
 const script = component.match(/<script lang="ts">([\s\S]*?)<\/script>/)[1];
 const ast = ts.createSourceFile('ChatContainer.ts', script, ts.ScriptTarget.Latest, true);
-const names = new Set(['handleSend', 'handleKeydown', 'keepFocus', 'resetHeight', 'setInputEnabled', 'focus', 'showAskUser', 'cancelAskUser', 'handleSessionChange']);
+const names = new Set(['handleSend', 'handleKeydown', 'keepFocus', 'resetHeight', 'closeMenus', 'setInputEnabled', 'focus', 'promptAnswer']);
 const declarations = ast.statements.filter(node => ts.isFunctionDeclaration(node) && names.has(node.name?.text));
 assert.equal(declarations.length, names.size);
 const handlers = ts.transpile(declarations.map(node => node.getText(ast).replace(/^export /, '')).join('\n'), { target: ts.ScriptTarget.ES2022 });
-const viewCode = ts.transpileModule(fs.readFileSync('src/ui/chat-view.ts', 'utf8'), {
+const cjs = file => ts.transpileModule(fs.readFileSync(file, 'utf8'), {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
 }).outputText;
+const storeCode = cjs('src/sessions.ts');
+const viewCode = cjs('src/ui/chat-view.ts');
+
+function load(code, modules) {
+  const exports = {};
+  vm.runInContext(code, vm.createContext({ exports, require(name) {
+    if (name in modules) return modules[name];
+    throw new Error('Unexpected import: ' + name);
+  } }));
+  return exports;
+}
 
 function fixture({ immediate = false } = {}) {
   let active = 'textarea', focusCalls = 0, saved = 0, pending;
-  const turns = [], callbacks = [], notices = [], sent = [], answers = [];
-  const context = vm.createContext({
-    inputText: '', inputEnabled: true, placeholder: 'Ask anything...', selection: null,
-    askUserResolve: null, textareaEl: { style: {}, focus() { active = 'textarea'; focusCalls++; } },
-    addUserMessage: text => answers.push(text),
-    addAssistantMessage() {},
-    onSend: (text, selection) => { sent.push({ text, selection }); pending = view.handleUserMessage(text, selection); },
-  });
-  vm.runInContext(handlers, context);
-  const session = { id: 'test', title: 'Test', chatHistory: [], touch() {}, maybeTitleFrom() {}, agent: {
+  const turns = [], callbacks = [], notices = [], sent = [];
+
+  // Each turn's run() waits for the test, unless `immediate`.
+  class AgentLoop {
     run(_prompt, handlers) {
       callbacks.push(handlers);
       if (immediate) return Promise.resolve();
       return new Promise(resolve => turns.push(resolve));
-    }, abort() {}, clear() {},
-  } };
-  const plugin = { sessions: { active: () => session, list: () => [session] }, saveChatHistory() { saved++; } };
-  const exports = {};
-  const host = vm.createContext({ exports, require(name) {
-    if (name === 'obsidian') return { ItemView: class {}, Notice: function(text) { notices.push(text); } };
-    if (name === 'svelte') return { unmount() {} };
-    if (name === './ChatContainer.svelte') return {};
-    if (name === '../settings') return {};
-    throw new Error('Unexpected import: ' + name);
-  } });
-  vm.runInContext(viewCode, host);
-  const view = new exports.ObsidianChatView({}, plugin);
+    }
+    abort() {} clear() {}
+  }
+  const { SessionStore } = load(storeCode, {
+    obsidian: { App: class {} },
+    './agent/loop': { AgentLoop, isTurnStart: () => true },
+    './util/id': { uniqueId: prefix => prefix + Math.random().toString(36).slice(2) },
+  });
+  const store = new SessionStore({}, {});
+  store.onChange = () => { saved++; };
+  const session = store.create();
+
+  const context = vm.createContext({
+    inputText: '', inputEnabled: true, placeholder: 'Ask anything...', selection: null,
+    awaitingAnswer: false, mention: null, command: null, menuOpen: false, dismissedStart: -1, commandDismissedAt: -1,
+    fileLinkMenuEnabled: () => true,
+    textareaEl: { style: {}, focus() { active = 'textarea'; focusCalls++; } },
+    onSend: (text, selection) => { sent.push({ text, selection }); pending = view.handleUserMessage(text, selection); },
+  });
+  vm.runInContext(handlers, context);
+
+  const noop = () => {};
+  const { ObsidianChatView } = load(viewCode, {
+    obsidian: { ItemView: class {}, Notice: function(text) { notices.push(text); } },
+    svelte: { mount() {}, unmount() {} },
+    './ChatContainer.svelte': {},
+    '../skills/store': {},
+    '../types': { resolveModel: () => '' },
+    '../settings': { getModelDisplayName: () => '' },
+    '../api/context-window': { onContextWindowsChange: () => noop },
+    '../api/compaction': { contextBudget: () => 0 },
+  });
+  const view = new ObsidianChatView({}, { sessions: store, settings: {}, discardIfAbandoned() {} });
   view.chatContainer = {
-    setInputEnabled: context.setInputEnabled, focus: context.focus,
-    showAskUser: context.showAskUser, cancelAskUser: context.cancelAskUser,
-    addUserMessage() {}, setSessions() {}, hideThinking() {}, clearMessages() {},
+    setInputEnabled: context.setInputEnabled, focus: context.focus, promptAnswer: context.promptAnswer,
+    addUserMessage: noop, addAssistantMessage: noop, addError: noop, addNotice: noop,
+    showThinking: noop, hideThinking: noop, clearMessages: noop, setSessions: noop, setTitle: noop,
+    setContext: noop,
   };
-  return { context, view, turns, callbacks, sent, answers, notices,
+  view.sessionId = session.id;
+  view.unsubscribe = store.subscribe(session.id, event => view.applyEvent(event));
+
+  return { context, view, store, session, turns, callbacks, sent, notices,
     get active() { return active; }, get focusCalls() { return focusCalls; }, get saved() { return saved; },
     moveFocus(target = 'other pane') { active = target; },
     send(text = 'hello') { context.inputText = text; context.handleSend(); return pending; },
@@ -110,6 +140,13 @@ test('Stop focuses the input immediately; stale completion cannot take focus lat
   assert.equal(f.focusCalls, focusAfterStop);
 });
 
+test('Clear focuses the input', () => {
+  const f = fixture();
+  f.moveFocus('clear button');
+  f.view.handleClear();
+  assert.equal(f.active, 'textarea');
+});
+
 test('a stopped turn cannot unlock a new running turn', async () => {
   const f = fixture();
   const old = f.send('old');
@@ -147,74 +184,67 @@ test('mouse/touch compatibility mousedown cancels only default focus movement', 
   assert.equal(f.sent.length, 0);
 });
 
-test('answering ask_user keeps its answer path and restores explicit-send focus', () => {
-  const f = fixture();
-  let answer;
-  f.context.askUserResolve = text => answer = text;
-  f.moveFocus('send button');
-  f.send(' answer ');
-  assert.equal(answer, 'answer');
-  assert.deepEqual(f.answers, ['answer']);
-  assert.equal(f.sent.length, 0);
-  assert.equal(f.active, 'textarea');
-});
-
-
 test('pending question cue follows the free-text answer lifecycle', async () => {
   const f = fixture();
-  assert.equal(f.context.askUserResolve, null);
-  const answer = f.context.showAskUser('Which note?');
-  assert.equal(typeof f.context.askUserResolve, 'function');
+  const pending = f.send('which one?');
+  assert.equal(f.context.awaitingAnswer, false);
+  const answer = f.callbacks[0].onAskUser('Which note?');
+  assert.equal(f.context.awaitingAnswer, true);
+  assert.equal(f.context.inputEnabled, true);
   assert.equal(f.context.placeholder, 'Type your answer...');
-  f.send('the second note');
+  f.moveFocus('send button');
+  f.send(' the second note ');
   assert.equal(await answer, 'the second note');
-  assert.equal(f.context.askUserResolve, null);
+  assert.equal(f.active, 'textarea');
+  assert.equal(f.context.awaitingAnswer, false);
+  assert.equal(f.context.inputEnabled, false);
+  f.turns[0]();
+  await pending;
+  assert.equal(f.context.inputEnabled, true);
 });
 
-test('stopping a pending question releases it and next send starts a new turn', async () => {
-  const f = fixture({ immediate: true });
-  const answer = f.context.showAskUser('Which note?');
-  f.view.handleStop();
-  assert.equal(await answer, '');
-  assert.equal(f.context.askUserResolve, null);
-  assert.equal(f.context.placeholder, 'Ask anything...');
-  await f.send('new message');
-  assert.equal(f.sent[0].text, 'new message');
-  assert.deepEqual(f.answers, []);
-});
-
-
-test('a rejected switch restores the selected chat without rebuilding a pending transcript', async () => {
+test('an answer leaves the selection for the next message', async () => {
   const f = fixture();
-  f.context.activeSessionId = 'test';
-  f.context.onSelectSession = id => f.view.switchSession(id);
-  const pending = f.send();
-  const question = f.context.showAskUser('Which note?');
-  const select = { value: 'other' };
-  f.context.handleSessionChange({ currentTarget: select });
-  assert.equal(select.value, 'test');
-  assert.equal(typeof f.context.askUserResolve, 'function');
-  f.send('the second note');
-  assert.equal(await question, 'the second note');
+  const pending = f.send('which one?');
+  const answer = f.callbacks[0].onAskUser('Which note?');
+  const selection = { filePath: 'Note.md', text: 'picked' };
+  f.context.selection = selection;
+  f.send('this one');
+  assert.equal(await answer, 'this one');
+  assert.equal(f.sent[1].selection, null);
+  assert.equal(f.context.selection, selection);
   f.turns[0]();
   await pending;
 });
 
-
-for (const cancel of ['handleClear', 'onClose']) {
-  test(`${cancel} releases a pending question and frees the current chat`, async () => {
+for (const cancel of ['handleStop', 'handleClear']) {
+  test(`${cancel} releases a pending question and the next send starts a new turn`, async () => {
     const f = fixture();
-    const pending = f.send();
-    const question = f.context.showAskUser('Which note?');
-    await f.view[cancel]();
-    assert.equal(await question, '');
-    assert.equal(f.context.askUserResolve, null);
-    assert.equal(f.view.canSwitchSession(), true);
+    const pending = f.send('first');
+    const answer = f.callbacks[0].onAskUser('Which note?');
+    f.view[cancel]();
+    assert.equal(await answer, '');
+    assert.equal(f.context.awaitingAnswer, false);
+    assert.equal(f.context.placeholder, 'Ask anything...');
+    const next = f.send('new message');
+    assert.equal(f.callbacks.length, 2);
     f.turns[0]();
-    await pending;
+    f.turns[1]();
+    await Promise.all([pending, next]);
   });
 }
 
+test('closing the pane leaves a pending question with its session', async () => {
+  const f = fixture();
+  const pending = f.send('first');
+  const answer = f.callbacks[0].onAskUser('Which note?');
+  await f.view.onClose();
+  assert.equal(f.session.pendingQuestion, 'Which note?');
+  assert.equal(await f.store.run(f.session.id, 'that one', null), 'answered');
+  assert.equal(await answer, 'that one');
+  f.turns[0]();
+  await pending;
+});
 
 test('a canceled question callback cannot disable the next turn’s pending answer', async () => {
   const f = fixture();
@@ -222,8 +252,8 @@ test('a canceled question callback cannot disable the next turn’s pending answ
   const oldQuestion = f.callbacks[0].onAskUser('Which note first?');
   f.view.handleClear();
 
-  // The first question's async callback resumes in a microtask. Start an
-  // independent turn with its own question before that continuation runs.
+  // The first question's promise settles in a microtask. Start an independent
+  // turn with its own question before that continuation runs.
   const newTurn = f.send('next prompt');
   const newQuestion = f.callbacks[1].onAskUser('Which note next?');
   assert.equal(await oldQuestion, '');

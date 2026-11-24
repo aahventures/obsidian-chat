@@ -78,9 +78,6 @@
   // Selection scope (shown as a pill above input)
   let selection = $state<SelectionScope | null>(null);
 
-  // ask_user support
-  let askUserResolve: ((value: string) => void) | null = $state(null);
-
   // Context meter: the latest request's size, against where that model's chat
   // compacts, or else the model's limit when known.
   let context = $state<ContextUsage | null>(null);
@@ -209,13 +206,6 @@
     // An answer can't use a skill.
     command = null;
     textareaEl?.focus();
-  }
-
-  /** Release a paused agent when its turn is aborted, without sending an answer. */
-  export function cancelAskUser(): void {
-    const resolve = askUserResolve;
-    askUserResolve = null;
-    resolve?.("");
   }
 
   export function setInputEnabled(enabled: boolean): void {
@@ -1090,6 +1080,13 @@
     </div>
   {/if}
 
+  <!-- Keep the live region mounted so assistive technology announces the change. -->
+  <div role="status" aria-atomic="true">
+    {#if awaitingAnswer}
+      <div class="ochat-answer-status">Waiting for your answer</div>
+    {/if}
+  </div>
+
   <!-- [[ file menu, or / skill menu -->
   {#if menuOpen}
     <div class="ochat-mention-menu" bind:this={menuEl}>
@@ -1108,13 +1105,6 @@
     </div>
   {/if}
 
-  <!-- Keep the live region mounted so assistive technology announces the change. -->
-  <div role="status" aria-atomic="true">
-    {#if askUserResolve}
-      <div class="ochat-answer-status">Waiting for your answer</div>
-    {/if}
-  </div>
-
   <!-- Input bar -->
   <div class="ochat-input-bar">
     <textarea
@@ -1122,7 +1112,7 @@
       bind:this={textareaEl}
       bind:value={inputText}
       {placeholder}
-      aria-label={askUserResolve ? "Answer the question" : "Chat message"}
+      aria-label={awaitingAnswer ? "Answer the question" : "Chat message"}
       rows="1"
       onkeydown={handleKeydown}
       oninput={handleInput}
@@ -1138,7 +1128,7 @@
         class="ochat-send-btn"
         onmousedown={keepFocus}
         onclick={handleSend}
-        aria-label={askUserResolve ? "Send answer" : "Send message"}
+        aria-label={awaitingAnswer ? "Send answer" : "Send message"}
       >
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"></line><polyline points="5 12 12 5 19 12"></polyline></svg>
       </button>

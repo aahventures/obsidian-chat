@@ -318,9 +318,10 @@ export class ObsidianChatView extends ItemView {
         if (event.running) {
           chat.setInputEnabled(false);
         } else {
+          // Not focused here: a reply finishing shouldn't pull focus back from
+          // wherever the user moved it. Send, Stop and Clear focus the input themselves.
           chat.hideThinking();
           chat.setInputEnabled(true);
-          chat.focus();
         }
         break;
       case "user-skills":
@@ -361,9 +362,11 @@ export class ObsidianChatView extends ItemView {
 
   private handleStop(): void {
     if (this.sessionId) this.plugin.sessions.abort(this.sessionId);
+    this.chatContainer?.focus();
   }
 
   private handleClear(): void {
     if (this.sessionId) this.plugin.sessions.clearMessages(this.sessionId);
+    this.chatContainer?.focus();
   }
 }
