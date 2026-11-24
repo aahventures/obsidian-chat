@@ -230,7 +230,6 @@ export default class ChatPlugin extends Plugin {
       new Notice("Please configure your API key in Obsidian Chat settings.");
       return;
     }
-    if (this.getChatView()?.canSwitchSession() === false) return;
     const view = await this.activateView();
     if (view) {
       await view.whenReady;
@@ -251,7 +250,6 @@ export default class ChatPlugin extends Plugin {
       new Notice("Please configure your API key in Obsidian Chat settings.");
       return null;
     }
-    if (this.getChatView()?.canSwitchSession() === false) return null;
     const pane = target ?? this.getChatView();
     const current = pane?.getSessionId();
     if (pane && current && this.sessions.get(current)?.isEmpty) {

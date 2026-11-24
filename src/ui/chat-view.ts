@@ -161,21 +161,14 @@ export class ObsidianChatView extends ItemView {
   /**
    * The header dropdown picked a chat. Returns whether this pane now shows it,
    * so the dropdown can go back to this pane's own chat when it doesn't.
+   * A running turn doesn't stop the switch: it runs in its session, not in the
+   * pane, so switching mid-turn leaves it running where it was.
    */
   selectSession(id: string): boolean {
-    if (!this.canSwitchSession()) return false;
     // A chat another pane shows is revealed there, and this pane keeps its own.
     const shownElsewhere = this.plugin.openSessionIds(this).has(id);
     void this.plugin.revealSession(id, this);
     return !shownElsewhere;
-  }
-
-  /** Keep a pending question or response attached to its original session. */
-  canSwitchSession(): boolean {
-    const session = this.sessionId ? this.plugin.sessions.get(this.sessionId) : undefined;
-    if (!session?.running) return true;
-    new Notice("Please wait for the current response to complete.");
-    return false;
   }
 
   async onClose(): Promise<void> {
